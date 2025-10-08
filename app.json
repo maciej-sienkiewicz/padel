@@ -1,4 +1,61 @@
 {
-  "name": "padel",
-  "displayName": "padel"
+  "expo": {
+    "name": "Padel Highlights",
+    "slug": "padel-highlights",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "padel",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0A0E27"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.padel",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Potrzebujemy dostępu do kamery, aby nagrywać akcje",
+        "NSMicrophoneUsageDescription": "Potrzebujemy dostępu do mikrofonu, aby nagrywać dźwięk"
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#0A0E27"
+      },
+      "package": "com.padel",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.VIBRATE",
+        "android.permission.INTERNET"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/images/favicon.png",
+      "bundler": "metro"
+    },
+    "plugins": [
+      [
+        "expo-router",
+        {
+          "origin": "https://padel.app/"
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Potrzebujemy dostępu do kamery, aby nagrywać akcje",
+          "microphonePermission": "Potrzebujemy dostępu do mikrofonu, aby nagrywać dźwięk",
+          "recordAudioAndroid": true
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
 }
