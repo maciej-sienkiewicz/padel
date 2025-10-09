@@ -1,6 +1,6 @@
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Circle, Wifi } from 'lucide-react-native';
+import { ArrowLeft, Circle, Wifi, Save } from 'lucide-react-native';
 import React, { useRef, useEffect } from 'react';
 import {
     View,
@@ -9,6 +9,7 @@ import {
     TouchableOpacity,
     Platform,
     Animated,
+    Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
@@ -20,7 +21,14 @@ import { useRecording } from '@/contexts/RecordingContext';
 export default function CameraScreen() {
     const router = useRouter();
     const [permission, requestPermission] = useCameraPermissions();
-    const { isRecording, isConnected, startRecording, stopRecording, connectWebSocket, disconnectWebSocket } = useRecording();
+    const {
+        isRecording,
+        isConnected,
+        startRecording,
+        stopRecording,
+        serverAddress,
+        highlights,
+    } = useRecording();
     const pulseAnim = useRef(new Animated.Value(1)).current;
 
     useEffect(() => {
@@ -45,20 +53,41 @@ export default function CameraScreen() {
     }, [isRecording, pulseAnim]);
 
     const handleBack = () => {
+        if (isRecording) {
+            Alert.alert(
+                'Zatrzymać nagrywanie?',
+                'Czy na pewno chcesz wrócić? Nagrywanie zostanie zatrzymane.',
+                [
+                    { text: 'Anuluj', style: 'cancel' },
+                    {
+                        text: 'Zatrzymaj',
+                        style: 'destructive',
+                        onPress: () => {
+                            stopRecording();
+                            router.back();
+                        },
+                    },
+                ]
+            );
+            return;
+        }
+
         if (Platform.OS !== 'web') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         }
         router.back();
     };
 
-    useEffect(() => {
-        connectWebSocket('camera');
-        return () => {
-            disconnectWebSocket();
-        };
-    }, [connectWebSocket, disconnectWebSocket]);
-
     const handleStartRecording = () => {
+        if (!isConnected) {
+            Alert.alert(
+                'Brak połączenia',
+                'Połącz najpierw pilota przed rozpoczęciem nagrywania',
+                [{ text: 'OK' }]
+            );
+            return;
+        }
+
         if (Platform.OS !== 'web') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         }
@@ -70,6 +99,13 @@ export default function CameraScreen() {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
         stopRecording();
+    };
+
+    const handleViewHighlights = () => {
+        if (Platform.OS !== 'web') {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }
+        router.push('/highlights');
     };
 
     if (!permission) {
@@ -145,6 +181,20 @@ export default function CameraScreen() {
                                 color={isConnected ? Colors.success : Colors.textMuted}
                             />
                         </View>
+
+                        <TouchableOpacity
+                            style={styles.highlightsButton}
+                            onPress={handleViewHighlights}
+                        >
+                            <View style={styles.iconButton}>
+                                <Save size={24} color={Colors.text} />
+                                {highlights.length > 0 && (
+                                    <View style={styles.badge}>
+                                        <Text style={styles.badgeText}>{highlights.length}</Text>
+                                    </View>
+                                )}
+                            </View>
+                        </TouchableOpacity>
                     </View>
 
                     <View style={styles.centerContent}>
@@ -159,16 +209,35 @@ export default function CameraScreen() {
                                 <Text style={styles.recordingText}>NAGRYWANIE</Text>
                             </Animated.View>
                         )}
+
+                        {!isConnected && !isRecording && (
+                            <View style={styles.warningContainer}>
+                                <Text style={styles.warningText}>
+                                    Oczekiwanie na połączenie z pilotem...
+                                </Text>
+                                <Text style={styles.warningSubtext}>
+                                    Adres: {serverAddress}
+                                </Text>
+                            </View>
+                        )}
                     </View>
 
                     <View style={styles.footer}>
                         {!isRecording ? (
                             <TouchableOpacity
-                                style={styles.recordButton}
+                                style={[
+                                    styles.recordButton,
+                                    !isConnected && styles.recordButtonDisabled,
+                                ]}
                                 onPress={handleStartRecording}
+                                disabled={!isConnected}
                             >
                                 <LinearGradient
-                                    colors={[Colors.primary, Colors.primaryDark]}
+                                    colors={
+                                        isConnected
+                                            ? [Colors.primary, Colors.primaryDark]
+                                            : [Colors.textMuted, Colors.backgroundLight]
+                                    }
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 1 }}
                                     style={styles.recordButtonGradient}
@@ -216,6 +285,10 @@ const styles = StyleSheet.create({
     backButton: {
         zIndex: 10,
     },
+    highlightsButton: {
+        zIndex: 10,
+        position: 'relative',
+    },
     iconButton: {
         width: 48,
         height: 48,
@@ -223,6 +296,23 @@ const styles = StyleSheet.create({
         backgroundColor: 'rgba(255, 255, 255, 0.15)',
         justifyContent: 'center',
         alignItems: 'center',
+    },
+    badge: {
+        position: 'absolute',
+        top: -4,
+        right: -4,
+        backgroundColor: Colors.accent,
+        borderRadius: 10,
+        minWidth: 20,
+        height: 20,
+        justifyContent: 'center',
+        alignItems: 'center',
+        paddingHorizontal: 6,
+    },
+    badgeText: {
+        color: Colors.text,
+        fontSize: 12,
+        fontWeight: '700',
     },
     statusContainer: {
         flexDirection: 'row',
@@ -241,12 +331,13 @@ const styles = StyleSheet.create({
     statusText: {
         color: Colors.text,
         fontSize: 14,
-        fontWeight: '600' as const,
+        fontWeight: '600',
     },
     centerContent: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
+        paddingHorizontal: 20,
     },
     recordingIndicator: {
         flexDirection: 'row',
@@ -262,8 +353,29 @@ const styles = StyleSheet.create({
     recordingText: {
         color: Colors.text,
         fontSize: 18,
-        fontWeight: '800' as const,
+        fontWeight: '800',
         letterSpacing: 2,
+    },
+    warningContainer: {
+        backgroundColor: 'rgba(255, 184, 0, 0.2)',
+        borderRadius: 20,
+        padding: 24,
+        borderWidth: 2,
+        borderColor: Colors.warning,
+        alignItems: 'center',
+    },
+    warningText: {
+        color: Colors.text,
+        fontSize: 16,
+        fontWeight: '700',
+        textAlign: 'center',
+        marginBottom: 8,
+    },
+    warningSubtext: {
+        color: Colors.textMuted,
+        fontSize: 14,
+        textAlign: 'center',
+        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     },
     footer: {
         paddingHorizontal: 20,
@@ -275,6 +387,9 @@ const styles = StyleSheet.create({
         borderRadius: 32,
         overflow: 'hidden',
     },
+    recordButtonDisabled: {
+        opacity: 0.6,
+    },
     recordButtonGradient: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -285,7 +400,7 @@ const styles = StyleSheet.create({
     recordButtonText: {
         color: Colors.text,
         fontSize: 20,
-        fontWeight: '700' as const,
+        fontWeight: '700',
     },
     stopButton: {
         width: '100%',
@@ -311,7 +426,7 @@ const styles = StyleSheet.create({
     stopButtonText: {
         color: Colors.text,
         fontSize: 20,
-        fontWeight: '700' as const,
+        fontWeight: '700',
     },
     permissionContainer: {
         flex: 1,
@@ -321,7 +436,7 @@ const styles = StyleSheet.create({
     },
     permissionTitle: {
         fontSize: 28,
-        fontWeight: '700' as const,
+        fontWeight: '700',
         color: Colors.text,
         marginBottom: 16,
         textAlign: 'center',
@@ -345,6 +460,6 @@ const styles = StyleSheet.create({
     permissionButtonText: {
         color: Colors.text,
         fontSize: 18,
-        fontWeight: '700' as const,
+        fontWeight: '700',
     },
 });

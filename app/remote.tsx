@@ -1,186 +1,305 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Wifi, List, Zap } from 'lucide-react-native';
-import React, { useRef, useEffect } from 'react';
+import { ArrowLeft, Wifi, Camera as CameraIcon, Clock } from 'lucide-react-native';
+import React, { useState, useEffect } from 'react';
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
     Platform,
-    Animated,
+    Alert,
+    ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 
 import Colors from '@/constants/colors';
-import { useRecording } from '@/contexts/RecordingContext';
+import RemotePilotService from '@/services/RemotePilotService';
 
 export default function RemoteScreen() {
     const router = useRouter();
-    const { isConnected, highlights, sendCaptureCommand, connectWebSocket, disconnectWebSocket } = useRecording();
-    const scaleAnim = useRef(new Animated.Value(1)).current;
-    const flashAnim = useRef(new Animated.Value(0)).current;
+    const [permission, requestPermission] = useCameraPermissions();
+
+    const [scanning, setScanning] = useState(false);
+    const [connected, setConnected] = useState(false);
+    const [cameraIP, setCameraIP] = useState('');
+    const [pilotID, setPilotID] = useState('');
+    const [sending, setSending] = useState(false);
 
     useEffect(() => {
-        connectWebSocket('remote');
+        // Generuj pilot ID
+        const id = RemotePilotService.getPilotID();
+        setPilotID(id);
+
         return () => {
-            disconnectWebSocket();
+            RemotePilotService.disconnect();
         };
-    }, [connectWebSocket, disconnectWebSocket]);
+    }, []);
 
     const handleBack = () => {
         if (Platform.OS !== 'web') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         }
+        RemotePilotService.disconnect();
         router.back();
     };
 
-    const handleCapture = () => {
-        if (Platform.OS !== 'web') {
-            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    const handleStartScanning = async () => {
+        if (!permission) {
+            await requestPermission();
+            return;
         }
 
-        Animated.sequence([
-            Animated.parallel([
-                Animated.timing(scaleAnim, {
-                    toValue: 0.9,
-                    duration: 100,
-                    useNativeDriver: true,
-                }),
-                Animated.timing(flashAnim, {
-                    toValue: 1,
-                    duration: 100,
-                    useNativeDriver: true,
-                }),
-            ]),
-            Animated.parallel([
-                Animated.spring(scaleAnim, {
-                    toValue: 1,
-                    friction: 3,
-                    tension: 40,
-                    useNativeDriver: true,
-                }),
-                Animated.timing(flashAnim, {
-                    toValue: 0,
-                    duration: 300,
-                    useNativeDriver: true,
-                }),
-            ]),
-        ]).start();
+        if (!permission.granted) {
+            Alert.alert('Brak uprawnień', 'Potrzebujemy dostępu do kamery aby zeskanować QR kod');
+            await requestPermission();
+            return;
+        }
 
-        sendCaptureCommand();
+        setScanning(true);
     };
 
-    const handleViewHighlights = () => {
-        if (Platform.OS !== 'web') {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const handleQRScanned = async ({ data }: { data: string }) => {
+        if (connected || sending) return;
+
+        console.log('QR scanned:', data);
+
+        // Parse QR data (format: "SSID:password:serverIP")
+        const parts = data.split(':');
+        if (parts.length < 3) {
+            Alert.alert('Błąd', 'Nieprawidłowy kod QR');
+            return;
         }
-        router.push('/highlights');
+
+        const serverIP = parts[2];
+        console.log('Server IP:', serverIP);
+
+        setScanning(false);
+        setSending(true);
+
+        try {
+            const success = await RemotePilotService.connectToServer(serverIP);
+
+            if (success) {
+                setConnected(true);
+                setCameraIP(serverIP);
+
+                if (Platform.OS !== 'web') {
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                }
+
+                Alert.alert(
+                    'Połączono!',
+                    `Pilot ${pilotID} połączony z kamerą`,
+                    [{ text: 'OK' }]
+                );
+            } else {
+                Alert.alert('Błąd', 'Nie udało się połączyć z kamerą');
+            }
+        } catch (error) {
+            console.error('Connection error:', error);
+            Alert.alert('Błąd', 'Nie udało się połączyć z kamerą');
+        } finally {
+            setSending(false);
+        }
+    };
+
+    const handleCapture = async (minutes: number) => {
+        if (!connected) {
+            Alert.alert('Błąd', 'Nie połączono z kamerą');
+            return;
+        }
+
+        if (Platform.OS !== 'web') {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+        }
+
+        setSending(true);
+
+        try {
+            const success = await RemotePilotService.sendCapture(minutes);
+
+            if (success) {
+                if (Platform.OS !== 'web') {
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                }
+
+                Alert.alert(
+                    'Wysłano!',
+                    `Sygnał ${minutes} min zapisany`,
+                    [{ text: 'OK' }]
+                );
+            } else {
+                Alert.alert('Błąd', 'Nie udało się wysłać sygnału');
+            }
+        } catch (error) {
+            console.error('Capture error:', error);
+            Alert.alert('Błąd', 'Nie udało się wysłać sygnału');
+        } finally {
+            setSending(false);
+        }
+    };
+
+    const handleDisconnect = () => {
+        RemotePilotService.disconnect();
+        setConnected(false);
+        setCameraIP('');
     };
 
     return (
         <View style={styles.container}>
             <LinearGradient
-                colors={[Colors.background, Colors.backgroundLight]}
+                colors={['#1a1a2e', '#16213e']}
                 style={StyleSheet.absoluteFillObject}
             />
-            <Animated.View
-                style={[
-                    StyleSheet.absoluteFillObject,
-                    {
-                        backgroundColor: Colors.accent,
-                        opacity: flashAnim,
-                    },
-                ]}
-            />
             <SafeAreaView style={styles.safeArea}>
+                {/* Header */}
                 <View style={styles.header}>
                     <TouchableOpacity style={styles.backButton} onPress={handleBack}>
                         <View style={styles.iconButton}>
                             <ArrowLeft size={24} color={Colors.text} />
                         </View>
                     </TouchableOpacity>
-
-                    <View style={styles.statusContainer}>
-                        <View
-                            style={[
-                                styles.statusDot,
-                                { backgroundColor: isConnected ? Colors.success : Colors.textMuted },
-                            ]}
-                        />
-                        <Text style={styles.statusText}>
-                            {isConnected ? 'Połączono' : 'Oczekiwanie'}
-                        </Text>
-                        <Wifi
-                            size={20}
-                            color={isConnected ? Colors.success : Colors.textMuted}
-                        />
-                    </View>
+                    <Text style={styles.headerTitle}>Tryb Pilot</Text>
+                    <View style={styles.placeholder} />
                 </View>
 
                 <View style={styles.content}>
-                    <View style={styles.infoSection}>
-                        <Text style={styles.title}>Pilot nagrywania</Text>
-                        <Text style={styles.subtitle}>
-                            Naciśnij przycisk, gdy wydarzy się ciekawa akcja
-                        </Text>
-
-                        <View style={styles.statsContainer}>
-                            <View style={styles.statBox}>
-                                <Text style={styles.statNumber}>{highlights.length}</Text>
-                                <Text style={styles.statLabel}>Zapisanych akcji</Text>
-                            </View>
+                    {/* Status Card */}
+                    <View style={styles.statusCard}>
+                        <View style={styles.statusRow}>
+                            <Wifi size={20} color={connected ? '#10B981' : Colors.textMuted} />
+                            <Text style={styles.statusText}>
+                                {connected ? 'Połączony' : 'Niepołączony'}
+                            </Text>
                         </View>
+                        {connected && (
+                            <Text style={styles.statusSubtext}>Kamera: {cameraIP}</Text>
+                        )}
+                        <Text style={styles.pilotIDText}>ID: {pilotID}</Text>
                     </View>
 
-                    <View style={styles.captureSection}>
-                        <Animated.View
-                            style={[
-                                styles.captureButtonWrapper,
-                                { transform: [{ scale: scaleAnim }] },
-                            ]}
-                        >
+                    {!connected && !scanning && (
+                        <View style={styles.scanSection}>
+                            <View style={styles.instructionCard}>
+                                <CameraIcon size={48} color="#7C3AED" />
+                                <Text style={styles.instructionTitle}>Zeskanuj QR kod</Text>
+                                <Text style={styles.instructionText}>
+                                    Wyświetl kod QR na telefonie z kamerą i zeskanuj go poniższym przyciskiem
+                                </Text>
+                            </View>
+
                             <TouchableOpacity
-                                activeOpacity={0.9}
-                                onPress={handleCapture}
-                                disabled={!isConnected}
-                                style={styles.captureButton}
+                                style={styles.scanButton}
+                                onPress={handleStartScanning}
+                                disabled={sending}
                             >
                                 <LinearGradient
-                                    colors={
-                                        isConnected
-                                            ? [Colors.accent, '#FF1744']
-                                            : [Colors.textMuted, Colors.backgroundLight]
-                                    }
+                                    colors={['#7C3AED', '#5B21B6']}
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 1 }}
+                                    style={styles.scanButtonGradient}
+                                >
+                                    {sending ? (
+                                        <ActivityIndicator color={Colors.text} />
+                                    ) : (
+                                        <>
+                                            <CameraIcon size={24} color={Colors.text} />
+                                            <Text style={styles.scanButtonText}>Skanuj kod QR</Text>
+                                        </>
+                                    )}
+                                </LinearGradient>
+                            </TouchableOpacity>
+                        </View>
+                    )}
+
+                    {scanning && (
+                        <View style={styles.cameraContainer}>
+                            <Text style={styles.cameraTitle}>Wyceluj w kod QR</Text>
+                            <View style={styles.cameraWrapper}>
+                                <CameraView
+                                    style={styles.camera}
+                                    facing="back"
+                                    onBarcodeScanned={handleQRScanned}
+                                    barcodeScannerSettings={{
+                                        barcodeTypes: ['qr'],
+                                    }}
+                                />
+                            </View>
+                            <TouchableOpacity
+                                style={styles.cancelButton}
+                                onPress={() => setScanning(false)}
+                            >
+                                <Text style={styles.cancelButtonText}>Anuluj</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
+
+                    {connected && !scanning && (
+                        <View style={styles.controlsSection}>
+                            {/* 2 Minutes Button */}
+                            <TouchableOpacity
+                                style={styles.captureButton}
+                                onPress={() => handleCapture(2)}
+                                disabled={sending}
+                            >
+                                <LinearGradient
+                                    colors={['#3B82F6', '#2563EB']}
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 1 }}
                                     style={styles.captureButtonGradient}
                                 >
-                                    <View style={styles.captureIconContainer}>
-                                        <Zap size={64} color={Colors.text} fill={Colors.text} />
-                                    </View>
+                                    {sending ? (
+                                        <ActivityIndicator color={Colors.text} size="large" />
+                                    ) : (
+                                        <>
+                                            <Clock size={32} color={Colors.text} />
+                                            <Text style={styles.captureButtonText}>2 minuty</Text>
+                                            <Text style={styles.captureButtonSubtext}>
+                                                Zapisz ostatnie 2 minuty
+                                            </Text>
+                                        </>
+                                    )}
                                 </LinearGradient>
                             </TouchableOpacity>
-                        </Animated.View>
-                        <Text style={styles.captureHint}>
-                            {isConnected ? 'Naciśnij, aby zapisać akcję' : 'Oczekiwanie na połączenie'}
-                        </Text>
-                    </View>
 
-                    <View style={styles.footer}>
-                        <TouchableOpacity
-                            style={styles.highlightsButton}
-                            onPress={handleViewHighlights}
-                        >
-                            <View style={styles.highlightsButtonInner}>
-                                <List size={24} color={Colors.primary} />
-                                <Text style={styles.highlightsButtonText}>
-                                    Zobacz zapisane akcje
-                                </Text>
-                            </View>
-                        </TouchableOpacity>
-                    </View>
+                            {/* 5 Minutes Button */}
+                            <TouchableOpacity
+                                style={styles.captureButton}
+                                onPress={() => handleCapture(5)}
+                                disabled={sending}
+                            >
+                                <LinearGradient
+                                    colors={['#10B981', '#059669']}
+                                    start={{ x: 0, y: 0 }}
+                                    end={{ x: 1, y: 1 }}
+                                    style={styles.captureButtonGradient}
+                                >
+                                    {sending ? (
+                                        <ActivityIndicator color={Colors.text} size="large" />
+                                    ) : (
+                                        <>
+                                            <Clock size={32} color={Colors.text} />
+                                            <Text style={styles.captureButtonText}>5 minut</Text>
+                                            <Text style={styles.captureButtonSubtext}>
+                                                Zapisz ostatnie 5 minut
+                                            </Text>
+                                        </>
+                                    )}
+                                </LinearGradient>
+                            </TouchableOpacity>
+
+                            {/* Disconnect Button */}
+                            <TouchableOpacity
+                                style={styles.disconnectButton}
+                                onPress={handleDisconnect}
+                            >
+                                <Text style={styles.disconnectButtonText}>Rozłącz</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
                 </View>
             </SafeAreaView>
         </View>
@@ -200,6 +319,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingHorizontal: 20,
         paddingTop: 20,
+        paddingBottom: 20,
     },
     backButton: {
         zIndex: 10,
@@ -212,127 +332,164 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    statusContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        borderRadius: 24,
-        gap: 8,
-    },
-    statusDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-    },
-    statusText: {
+    headerTitle: {
+        fontSize: 20,
+        fontWeight: '700',
         color: Colors.text,
-        fontSize: 14,
-        fontWeight: '600' as const,
+    },
+    placeholder: {
+        width: 48,
     },
     content: {
         flex: 1,
-        paddingHorizontal: 24,
-        justifyContent: 'space-between',
-        paddingTop: 40,
-        paddingBottom: 20,
+        padding: 20,
     },
-    infoSection: {
-        alignItems: 'center',
-    },
-    title: {
-        fontSize: 32,
-        fontWeight: '800' as const,
-        color: Colors.text,
-        marginBottom: 12,
-        textAlign: 'center',
-    },
-    subtitle: {
-        fontSize: 16,
-        color: Colors.textMuted,
-        textAlign: 'center',
-        marginBottom: 32,
-        lineHeight: 24,
-    },
-    statsContainer: {
-        width: '100%',
+    statusCard: {
         backgroundColor: 'rgba(255, 255, 255, 0.05)',
-        borderRadius: 20,
-        padding: 24,
+        borderRadius: 16,
+        padding: 20,
+        marginBottom: 24,
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.1)',
     },
-    statBox: {
+    statusRow: {
+        flexDirection: 'row',
         alignItems: 'center',
-    },
-    statNumber: {
-        fontSize: 48,
-        fontWeight: '800' as const,
-        color: Colors.primary,
+        gap: 12,
         marginBottom: 8,
     },
-    statLabel: {
+    statusText: {
         fontSize: 16,
+        fontWeight: '600',
+        color: Colors.text,
+    },
+    statusSubtext: {
+        fontSize: 14,
         color: Colors.textMuted,
-        fontWeight: '600' as const,
+        marginTop: 4,
+        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     },
-    captureSection: {
-        alignItems: 'center',
-        gap: 24,
-    },
-    captureButtonWrapper: {
-        width: 200,
-        height: 200,
-    },
-    captureButton: {
-        width: '100%',
-        height: '100%',
-        borderRadius: 100,
-        overflow: 'hidden',
-        elevation: 16,
-        shadowColor: Colors.accent,
-        shadowOffset: { width: 0, height: 12 },
-        shadowOpacity: 0.5,
-        shadowRadius: 24,
-    },
-    captureButtonGradient: {
-        width: '100%',
-        height: '100%',
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    captureIconContainer: {
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    captureHint: {
-        fontSize: 18,
+    pilotIDText: {
+        fontSize: 12,
         color: Colors.textMuted,
-        fontWeight: '600' as const,
-        textAlign: 'center',
+        marginTop: 8,
+        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     },
-    footer: {
-        width: '100%',
+    scanSection: {
+        flex: 1,
+        justifyContent: 'center',
     },
-    highlightsButton: {
-        width: '100%',
+    instructionCard: {
+        backgroundColor: 'rgba(124, 58, 237, 0.1)',
         borderRadius: 20,
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        padding: 32,
+        alignItems: 'center',
+        marginBottom: 24,
         borderWidth: 1,
-        borderColor: Colors.primary,
+        borderColor: 'rgba(124, 58, 237, 0.3)',
+    },
+    instructionTitle: {
+        fontSize: 24,
+        fontWeight: '700',
+        color: Colors.text,
+        marginTop: 16,
+        marginBottom: 12,
+    },
+    instructionText: {
+        fontSize: 14,
+        color: Colors.textMuted,
+        textAlign: 'center',
+        lineHeight: 20,
+    },
+    scanButton: {
+        borderRadius: 16,
         overflow: 'hidden',
     },
-    highlightsButtonInner: {
+    scanButtonGradient: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
-        paddingVertical: 18,
         gap: 12,
+        paddingVertical: 20,
     },
-    highlightsButtonText: {
+    scanButtonText: {
+        fontSize: 18,
+        fontWeight: '700',
         color: Colors.text,
+    },
+    cameraContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    cameraTitle: {
+        fontSize: 18,
+        fontWeight: '600',
+        color: Colors.text,
+        marginBottom: 16,
+    },
+    cameraWrapper: {
+        width: '100%',
+        aspectRatio: 1,
+        borderRadius: 20,
+        overflow: 'hidden',
+        marginBottom: 20,
+    },
+    camera: {
+        flex: 1,
+    },
+    cancelButton: {
+        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        paddingHorizontal: 32,
+        paddingVertical: 12,
+        borderRadius: 12,
+    },
+    cancelButtonText: {
         fontSize: 16,
-        fontWeight: '700' as const,
+        fontWeight: '600',
+        color: Colors.text,
+    },
+    controlsSection: {
+        flex: 1,
+        justifyContent: 'center',
+        gap: 16,
+    },
+    captureButton: {
+        borderRadius: 20,
+        overflow: 'hidden',
+        elevation: 8,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+    },
+    captureButtonGradient: {
+        padding: 32,
+        alignItems: 'center',
+        gap: 8,
+    },
+    captureButtonText: {
+        fontSize: 28,
+        fontWeight: '800',
+        color: Colors.text,
+    },
+    captureButtonSubtext: {
+        fontSize: 14,
+        color: Colors.text,
+        opacity: 0.8,
+    },
+    disconnectButton: {
+        backgroundColor: 'rgba(239, 68, 68, 0.2)',
+        paddingVertical: 16,
+        borderRadius: 12,
+        alignItems: 'center',
+        marginTop: 8,
+        borderWidth: 1,
+        borderColor: 'rgba(239, 68, 68, 0.3)',
+    },
+    disconnectButtonText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#EF4444',
     },
 });

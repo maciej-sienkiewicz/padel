@@ -1,13 +1,12 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { Video, Camera } from 'lucide-react-native';
+import { Camera, Smartphone } from 'lucide-react-native';
 import React from 'react';
 import {
     View,
     Text,
     StyleSheet,
     TouchableOpacity,
-    Animated,
     Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -17,33 +16,15 @@ import Colors from '@/constants/colors';
 
 export default function HomeScreen() {
     const router = useRouter();
-    const scaleAnim1 = React.useRef(new Animated.Value(1)).current;
-    const scaleAnim2 = React.useRef(new Animated.Value(1)).current;
 
-    const handlePressIn = (anim: Animated.Value) => {
-        Animated.spring(anim, {
-            toValue: 0.95,
-            useNativeDriver: true,
-        }).start();
-    };
-
-    const handlePressOut = (anim: Animated.Value) => {
-        Animated.spring(anim, {
-            toValue: 1,
-            friction: 3,
-            tension: 40,
-            useNativeDriver: true,
-        }).start();
-    };
-
-    const handleCameraPress = () => {
+    const handleCameraMode = () => {
         if (Platform.OS !== 'web') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
         router.push('/camera');
     };
 
-    const handleRemotePress = () => {
+    const handleRemoteMode = () => {
         if (Platform.OS !== 'web') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
@@ -58,73 +39,79 @@ export default function HomeScreen() {
             />
             <SafeAreaView style={styles.safeArea}>
                 <View style={styles.content}>
+                    {/* Logo/Header */}
                     <View style={styles.header}>
                         <Text style={styles.title}>Padel Highlights</Text>
                         <Text style={styles.subtitle}>
-                            Wybierz tryb urządzenia
+                            Nagrywaj najlepsze akcje z meczu
                         </Text>
                     </View>
 
-                    <View style={styles.buttonsContainer}>
-                        <Animated.View
-                            style={[
-                                styles.buttonWrapper,
-                                { transform: [{ scale: scaleAnim1 }] },
-                            ]}
+                    {/* Mode Selection */}
+                    <View style={styles.modesContainer}>
+                        {/* Camera Mode */}
+                        <TouchableOpacity
+                            style={styles.modeCard}
+                            onPress={handleCameraMode}
+                            activeOpacity={0.8}
                         >
-                            <TouchableOpacity
-                                activeOpacity={0.9}
-                                onPressIn={() => handlePressIn(scaleAnim1)}
-                                onPressOut={() => handlePressOut(scaleAnim1)}
-                                onPress={handleCameraPress}
-                                style={styles.button}
+                            <LinearGradient
+                                colors={[Colors.primary, Colors.primaryDark]}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 1 }}
+                                style={styles.modeCardGradient}
                             >
-                                <LinearGradient
-                                    colors={[Colors.primary, Colors.primaryDark]}
-                                    start={{ x: 0, y: 0 }}
-                                    end={{ x: 1, y: 1 }}
-                                    style={styles.buttonGradient}
-                                >
-                                    <View style={styles.iconContainer}>
-                                        <Camera size={48} color={Colors.text} strokeWidth={2} />
-                                    </View>
-                                    <Text style={styles.buttonTitle}>Kamera</Text>
-                                    <Text style={styles.buttonDescription}>
-                                        Nagrywa akcje przy ścianie
-                                    </Text>
-                                </LinearGradient>
-                            </TouchableOpacity>
-                        </Animated.View>
+                                <View style={styles.modeIcon}>
+                                    <Camera size={48} color={Colors.text} />
+                                </View>
+                                <Text style={styles.modeTitle}>Kamera</Text>
+                                <Text style={styles.modeDescription}>
+                                    Nagrywa akcje po sygnale z pilotów
+                                </Text>
+                            </LinearGradient>
+                        </TouchableOpacity>
 
-                        <Animated.View
-                            style={[
-                                styles.buttonWrapper,
-                                { transform: [{ scale: scaleAnim2 }] },
-                            ]}
+                        {/* Remote Mode */}
+                        <TouchableOpacity
+                            style={styles.modeCard}
+                            onPress={handleRemoteMode}
+                            activeOpacity={0.8}
                         >
-                            <TouchableOpacity
-                                activeOpacity={0.9}
-                                onPressIn={() => handlePressIn(scaleAnim2)}
-                                onPressOut={() => handlePressOut(scaleAnim2)}
-                                onPress={handleRemotePress}
-                                style={styles.button}
+                            <LinearGradient
+                                colors={['#7C3AED', '#5B21B6']} // Fioletowy gradient
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 1 }}
+                                style={styles.modeCardGradient}
                             >
-                                <LinearGradient
-                                    colors={[Colors.accent, '#FF1744']}
-                                    start={{ x: 0, y: 0 }}
-                                    end={{ x: 1, y: 1 }}
-                                    style={styles.buttonGradient}
-                                >
-                                    <View style={styles.iconContainer}>
-                                        <Video size={48} color={Colors.text} strokeWidth={2} />
-                                    </View>
-                                    <Text style={styles.buttonTitle}>Pilot</Text>
-                                    <Text style={styles.buttonDescription}>
-                                        Steruje nagrywaniem akcji
-                                    </Text>
-                                </LinearGradient>
-                            </TouchableOpacity>
-                        </Animated.View>
+                                <View style={styles.modeIcon}>
+                                    <Smartphone size={48} color={Colors.text} />
+                                </View>
+                                <Text style={styles.modeTitle}>Pilot</Text>
+                                <Text style={styles.modeDescription}>
+                                    Steruj nagrywaniem z drugiego telefonu
+                                </Text>
+                            </LinearGradient>
+                        </TouchableOpacity>
+
+                        {/* Info Card */}
+                        <View style={styles.infoCard}>
+                            <Text style={styles.infoTitle}>💡 Tryb testowy</Text>
+                            <Text style={styles.infoText}>
+                                Przed zbudowaniem pilotów ESP32, możesz przetestować aplikację używając dwóch telefonów:
+                            </Text>
+                            <Text style={styles.infoText}>
+                                • Telefon 1: Tryb "Kamera"
+                            </Text>
+                            <Text style={styles.infoText}>
+                                • Telefon 2: Tryb "Pilot"
+                            </Text>
+                            <Text style={styles.infoText}>
+                                • Zeskanuj QR kod pilotem
+                            </Text>
+                            <Text style={styles.infoText}>
+                                • Naciskaj przyciski na pilocie!
+                            </Text>
+                        </View>
                     </View>
                 </View>
             </SafeAreaView>
@@ -141,58 +128,78 @@ const styles = StyleSheet.create({
     },
     content: {
         flex: 1,
-        paddingHorizontal: 24,
+        padding: 24,
         justifyContent: 'center',
     },
     header: {
-        marginBottom: 60,
         alignItems: 'center',
+        marginBottom: 48,
     },
     title: {
-        fontSize: 42,
-        fontWeight: '800' as const,
+        fontSize: 36,
+        fontWeight: '800',
         color: Colors.text,
         marginBottom: 12,
-        letterSpacing: -1,
     },
     subtitle: {
-        fontSize: 18,
+        fontSize: 16,
         color: Colors.textMuted,
-        fontWeight: '500' as const,
+        textAlign: 'center',
     },
-    buttonsContainer: {
+    modesContainer: {
         gap: 20,
     },
-    buttonWrapper: {
-        width: '100%',
-    },
-    button: {
-        width: '100%',
+    modeCard: {
         borderRadius: 24,
         overflow: 'hidden',
         elevation: 8,
         shadowColor: Colors.primary,
-        shadowOffset: { width: 0, height: 8 },
+        shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
-        shadowRadius: 16,
+        shadowRadius: 8,
     },
-    buttonGradient: {
-        paddingVertical: 40,
-        paddingHorizontal: 32,
+    modeCardGradient: {
+        padding: 32,
         alignItems: 'center',
     },
-    iconContainer: {
-        marginBottom: 16,
+    modeIcon: {
+        width: 96,
+        height: 96,
+        borderRadius: 48,
+        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: 20,
     },
-    buttonTitle: {
+    modeTitle: {
         fontSize: 28,
-        fontWeight: '700' as const,
+        fontWeight: '800',
         color: Colors.text,
         marginBottom: 8,
     },
-    buttonDescription: {
-        fontSize: 16,
-        color: 'rgba(255, 255, 255, 0.8)',
-        fontWeight: '500' as const,
+    modeDescription: {
+        fontSize: 14,
+        color: Colors.text,
+        opacity: 0.9,
+        textAlign: 'center',
+    },
+    infoCard: {
+        backgroundColor: 'rgba(124, 58, 237, 0.1)',
+        borderRadius: 20,
+        padding: 24,
+        borderWidth: 1,
+        borderColor: 'rgba(124, 58, 237, 0.3)',
+    },
+    infoTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: Colors.text,
+        marginBottom: 12,
+    },
+    infoText: {
+        fontSize: 14,
+        color: Colors.textMuted,
+        marginBottom: 6,
+        lineHeight: 20,
     },
 });

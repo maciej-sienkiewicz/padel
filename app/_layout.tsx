@@ -13,6 +13,7 @@ function RootLayoutNav() {
     return (
         <Stack screenOptions={{ headerBackTitle: "Back" }}>
             <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="pairing" options={{ headerShown: false }} />
             <Stack.Screen name="camera" options={{ headerShown: false }} />
             <Stack.Screen name="remote" options={{ headerShown: false }} />
             <Stack.Screen name="highlights" options={{ headerShown: false }} />
