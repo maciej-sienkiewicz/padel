@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Wifi, Camera as CameraIcon, Clock } from 'lucide-react-native';
+import { ArrowLeft, Bluetooth, Clock } from 'lucide-react-native';
 import React, { useState, useEffect } from 'react';
 import {
     View,
@@ -13,26 +13,22 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { CameraView, useCameraPermissions } from 'expo-camera';
 
 import Colors from '@/constants/colors';
 import { useRecording } from '@/contexts/RecordingContext';
 
 export default function RemoteScreen() {
     const router = useRouter();
-    const [permission, requestPermission] = useCameraPermissions();
 
     const {
         isConnected,
-        serverAddress,
         connectToCamera,
         sendCaptureSignal,
         disconnect: contextDisconnect,
     } = useRecording();
 
-    const [scanning, setScanning] = useState(false);
+    const [connecting, setConnecting] = useState(false);
     const [sending, setSending] = useState(false);
-    const [scannedAddress, setScannedAddress] = useState('');
 
     const handleBack = () => {
         if (Platform.OS !== 'web') {
@@ -42,52 +38,26 @@ export default function RemoteScreen() {
         router.back();
     };
 
-    const handleStartScanning = async () => {
-        if (!permission) {
-            await requestPermission();
-            return;
+    const handleConnect = async () => {
+        if (Platform.OS !== 'web') {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
 
-        if (!permission.granted) {
-            Alert.alert('Brak uprawnień', 'Potrzebujemy dostępu do kamery aby zeskanować QR kod');
-            await requestPermission();
-            return;
-        }
-
-        setScanning(true);
-    };
-
-    const handleQRScanned = async ({ data }: { data: string }) => {
-        if (isConnected || sending) return;
-
-        console.log('QR scanned:', data);
-        setScannedAddress(data);
-        setScanning(false);
-        setSending(true);
+        setConnecting(true);
 
         try {
-            await connectToCamera(data);
-
-            if (Platform.OS !== 'web') {
-                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            }
-
-            Alert.alert(
-                'Połączono!',
-                `Pilot połączony z serwerem`,
-                [{ text: 'OK' }]
-            );
+            await connectToCamera();
         } catch (error) {
             console.error('Connection error:', error);
-            Alert.alert('Błąd', 'Nie udało się połączyć z serwerem');
+            Alert.alert('Błąd', 'Nie udało się połączyć z kamerą przez Bluetooth');
         } finally {
-            setSending(false);
+            setConnecting(false);
         }
     };
 
     const handleCapture = async (minutes: number) => {
         if (!isConnected) {
-            Alert.alert('Błąd', 'Nie połączono z serwerem');
+            Alert.alert('Błąd', 'Nie połączono z kamerą');
             return;
         }
 
@@ -106,7 +76,7 @@ export default function RemoteScreen() {
             }
 
             Alert.alert(
-                'Wysłano!',
+                '✅ Wysłano!',
                 `Sygnał ${minutes} min zapisany`,
                 [{ text: 'OK' }]
             );
@@ -119,8 +89,10 @@ export default function RemoteScreen() {
     };
 
     const handleDisconnect = () => {
+        if (Platform.OS !== 'web') {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }
         contextDisconnect();
-        setScannedAddress('');
     };
 
     return (
@@ -143,74 +115,69 @@ export default function RemoteScreen() {
                 <View style={styles.content}>
                     <View style={styles.statusCard}>
                         <View style={styles.statusRow}>
-                            <Wifi size={20} color={isConnected ? '#10B981' : Colors.textMuted} />
+                            <Bluetooth size={20} color={isConnected ? '#10B981' : Colors.textMuted} />
                             <Text style={styles.statusText}>
-                                {isConnected ? 'Połączony' : 'Niepołączony'}
+                                {isConnected ? 'Połączony przez Bluetooth' : 'Niepołączony'}
                             </Text>
                         </View>
-                        {isConnected && scannedAddress && (
-                            <Text style={styles.statusSubtext}>Serwer: {scannedAddress}</Text>
+                        {isConnected && (
+                            <Text style={styles.statusSubtext}>Gotowy do wysyłania sygnałów</Text>
                         )}
                     </View>
 
-                    {!isConnected && !scanning && (
-                        <View style={styles.scanSection}>
+                    {!isConnected && (
+                        <View style={styles.connectSection}>
                             <View style={styles.instructionCard}>
-                                <CameraIcon size={48} color="#7C3AED" />
-                                <Text style={styles.instructionTitle}>Zeskanuj QR kod</Text>
+                                <Bluetooth size={48} color="#7C3AED" />
+                                <Text style={styles.instructionTitle}>Połącz z kamerą</Text>
                                 <Text style={styles.instructionText}>
-                                    Wyświetl kod QR na telefonie z kamerą i zeskanuj go poniższym przyciskiem
+                                    Upewnij się, że telefon z kamerą ma włączoną aplikację w trybie "Kamera"
+                                </Text>
+                                <Text style={styles.instructionSubtext}>
+                                    Połączenie nastąpi automatycznie przez Bluetooth
                                 </Text>
                             </View>
 
                             <TouchableOpacity
-                                style={styles.scanButton}
-                                onPress={handleStartScanning}
-                                disabled={sending}
+                                style={styles.connectButton}
+                                onPress={handleConnect}
+                                disabled={connecting}
                             >
                                 <LinearGradient
                                     colors={['#7C3AED', '#5B21B6']}
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 1 }}
-                                    style={styles.scanButtonGradient}
+                                    style={styles.connectButtonGradient}
                                 >
-                                    {sending ? (
-                                        <ActivityIndicator color={Colors.text} />
+                                    {connecting ? (
+                                        <>
+                                            <ActivityIndicator color={Colors.text} />
+                                            <Text style={styles.connectButtonText}>Szukam kamery...</Text>
+                                        </>
                                     ) : (
                                         <>
-                                            <CameraIcon size={24} color={Colors.text} />
-                                            <Text style={styles.scanButtonText}>Skanuj kod QR</Text>
+                                            <Bluetooth size={24} color={Colors.text} />
+                                            <Text style={styles.connectButtonText}>Połącz przez Bluetooth</Text>
                                         </>
                                     )}
                                 </LinearGradient>
                             </TouchableOpacity>
-                        </View>
-                    )}
 
-                    {scanning && (
-                        <View style={styles.cameraContainer}>
-                            <Text style={styles.cameraTitle}>Wyceluj w kod QR</Text>
-                            <View style={styles.cameraWrapper}>
-                                <CameraView
-                                    style={styles.camera}
-                                    facing="back"
-                                    onBarcodeScanned={handleQRScanned}
-                                    barcodeScannerSettings={{
-                                        barcodeTypes: ['qr'],
-                                    }}
-                                />
+                            <View style={styles.infoBox}>
+                                <Text style={styles.infoText}>
+                                    💡 Upewnij się że Bluetooth jest włączony
+                                </Text>
+                                <Text style={styles.infoText}>
+                                    💡 Urządzenia powinny być w zasięgu do 30m
+                                </Text>
                             </View>
-                            <TouchableOpacity
-                                style={styles.cancelButton}
-                                onPress={() => setScanning(false)}
-                            >
-                                <Text style={styles.cancelButtonText}>Anuluj</Text>
-                            </TouchableOpacity>
                         </View>
                     )}
 
-                    {isConnected && !scanning && (
+                    {isConnected && (
                         <View style={styles.controlsSection}>
+                            <Text style={styles.controlsTitle}>Zapisz najlepsze akcje</Text>
+
                             <TouchableOpacity
                                 style={styles.captureButton}
                                 onPress={() => handleCapture(2)}
@@ -335,9 +302,8 @@ const styles = StyleSheet.create({
         fontSize: 14,
         color: Colors.textMuted,
         marginTop: 8,
-        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     },
-    scanSection: {
+    connectSection: {
         flex: 1,
         justifyContent: 'center',
     },
@@ -362,59 +328,54 @@ const styles = StyleSheet.create({
         color: Colors.textMuted,
         textAlign: 'center',
         lineHeight: 20,
+        marginBottom: 8,
     },
-    scanButton: {
+    instructionSubtext: {
+        fontSize: 12,
+        color: Colors.primary,
+        textAlign: 'center',
+        fontWeight: '600',
+    },
+    connectButton: {
         borderRadius: 16,
         overflow: 'hidden',
+        marginBottom: 20,
     },
-    scanButtonGradient: {
+    connectButtonGradient: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         gap: 12,
         paddingVertical: 20,
     },
-    scanButtonText: {
+    connectButtonText: {
         fontSize: 18,
         fontWeight: '700',
         color: Colors.text,
     },
-    cameraContainer: {
-        flex: 1,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    cameraTitle: {
-        fontSize: 18,
-        fontWeight: '600',
-        color: Colors.text,
-        marginBottom: 16,
-    },
-    cameraWrapper: {
-        width: '100%',
-        aspectRatio: 1,
-        borderRadius: 20,
-        overflow: 'hidden',
-        marginBottom: 20,
-    },
-    camera: {
-        flex: 1,
-    },
-    cancelButton: {
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
-        paddingHorizontal: 32,
-        paddingVertical: 12,
+    infoBox: {
+        backgroundColor: 'rgba(0, 217, 255, 0.1)',
         borderRadius: 12,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(0, 217, 255, 0.2)',
     },
-    cancelButtonText: {
-        fontSize: 16,
-        fontWeight: '600',
+    infoText: {
+        fontSize: 13,
         color: Colors.text,
+        marginBottom: 8,
+        lineHeight: 18,
     },
     controlsSection: {
         flex: 1,
         justifyContent: 'center',
-        gap: 16,
+    },
+    controlsTitle: {
+        fontSize: 20,
+        fontWeight: '700',
+        color: Colors.text,
+        textAlign: 'center',
+        marginBottom: 24,
     },
     captureButton: {
         borderRadius: 20,
@@ -424,6 +385,7 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
+        marginBottom: 16,
     },
     captureButtonGradient: {
         padding: 32,

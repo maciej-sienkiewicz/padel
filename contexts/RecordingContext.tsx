@@ -4,8 +4,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { Platform, Alert } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import TCPService from '@/services/TCPService';
-import type { P2PMessage } from '@/services/TCPService';
+import BLEService from '@/services/BLEService';
+import type { P2PMessage } from '@/services/BLEService';
 
 interface VideoSegment {
     uri: string;
@@ -19,7 +19,7 @@ interface Highlight {
     uri: string;
 }
 
-const BUFFER_DURATION = 120; // 2 minuty w sekundach
+const BUFFER_DURATION = 300; // 5 minut w sekundach (zwiększone z 2 do 5)
 const SEGMENT_DURATION = 10; // 10 sekund na segment
 
 export const [RecordingProvider, useRecording] = createContextHook(() => {
@@ -33,7 +33,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
 
     const videoSegments = useRef<VideoSegment[]>([]);
     const cameraRef = useRef<CameraView | null>(null);
-    const recordingInterval = useRef<any>(null);
+    const isRecordingRef = useRef<boolean>(false);
     const messageUnsubscribe = useRef<(() => void) | null>(null);
     const connectionUnsubscribe = useRef<(() => void) | null>(null);
 
@@ -77,7 +77,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
     }, []);
 
     const captureHighlight = useCallback(async (duration: number = 120) => {
-        if (!isRecording) {
+        if (!isRecordingRef.current) {
             Alert.alert('Błąd', 'Nagrywanie nie jest aktywne');
             return;
         }
@@ -157,7 +157,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             console.error('Failed to capture highlight:', error);
             Alert.alert('Błąd', 'Nie udało się zapisać akcji');
         }
-    }, [isRecording, mediaPermission, requestMediaPermission]);
+    }, [mediaPermission, requestMediaPermission]);
 
     const startAsCamera = useCallback(async () => {
         try {
@@ -170,13 +170,13 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                 }
             }
 
-            TCPService.setDeviceRole('camera');
-            const address = await TCPService.startServer();
+            BLEService.setDeviceRole('camera');
+            const address = await BLEService.startAsCamera();
             setServerAddress(address);
             setDeviceRole('camera');
 
             // Nasłuchuj wiadomości od pilotów
-            messageUnsubscribe.current = TCPService.onMessage((message: P2PMessage) => {
+            messageUnsubscribe.current = BLEService.onMessage((message: P2PMessage) => {
                 console.log('📹 Camera received:', message.type);
 
                 if (message.type === 'capture') {
@@ -189,18 +189,17 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             });
 
             // Nasłuchuj połączenia/rozłączenia pilotów
-            connectionUnsubscribe.current = TCPService.onConnection((connected) => {
+            connectionUnsubscribe.current = BLEService.onConnection((connected) => {
                 setIsConnected(connected);
                 if (connected) {
-                    console.log('✅ Pilot connected');
-                    Alert.alert('Połączono', 'Pilot został połączony!');
+                    console.log('✅ Pilot connected via BLE');
+                    Alert.alert('Połączono', 'Pilot został połączony przez Bluetooth!');
                 } else {
                     console.log('❌ Pilot disconnected');
                 }
             });
 
-            console.log('✅ Camera mode ready');
-            console.log('📱 Hotspot address:', address);
+            console.log('✅ Camera mode ready (BLE)');
 
         } catch (error) {
             console.error('Failed to start camera:', error);
@@ -208,37 +207,32 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
         }
     }, [cameraPermission, requestCameraPermission, captureHighlight]);
 
-    const connectToCamera = useCallback(async (address: string) => {
+    const connectToCamera = useCallback(async () => {
         try {
-            TCPService.setDeviceRole('remote');
-            const connected = await TCPService.connectToServer(address);
+            BLEService.setDeviceRole('remote');
+            const connected = await BLEService.connectToCamera();
 
             if (connected) {
                 setIsConnected(true);
-                setServerAddress(address);
+                setServerAddress('BLE Connected');
                 setDeviceRole('remote');
 
-                messageUnsubscribe.current = TCPService.onMessage((message: P2PMessage) => {
+                messageUnsubscribe.current = BLEService.onMessage((message: P2PMessage) => {
                     console.log('🎮 Remote received:', message.type);
-
-                    if (message.type === 'connected') {
-                        setIsConnected(true);
-                        console.log('✅ Connection confirmed by camera');
-                    }
                 });
 
-                console.log('✅ Connected to camera');
-                Alert.alert('Sukces', 'Połączono z kamerą!');
+                console.log('✅ Connected to camera via BLE');
+                Alert.alert('Sukces', 'Połączono z kamerą przez Bluetooth!');
             }
         } catch (error) {
             console.error('Failed to connect:', error);
             setIsConnected(false);
             Alert.alert(
                 'Błąd połączenia',
-                'Nie udało się połączyć z kamerą. Sprawdź czy:\n\n' +
-                '1. Kamera ma włączony hotspot WiFi\n' +
-                '2. Pilot jest połączony z hotspotem kamery\n' +
-                '3. Adres IP jest poprawny'
+                'Nie udało się połączyć z kamerą przez Bluetooth. Sprawdź czy:\n\n' +
+                '1. Kamera ma włączony Bluetooth\n' +
+                '2. Aplikacja na kamerze jest uruchomiona\n' +
+                '3. Urządzenia są blisko siebie (do 10m)'
             );
         }
     }, []);
@@ -249,13 +243,13 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             return;
         }
 
-        TCPService.sendMessage({
+        BLEService.sendMessage({
             type: 'capture',
             timestamp: Date.now(),
             duration: duration
         });
 
-        console.log(`📤 Capture signal sent (${duration}s)`);
+        console.log(`📤 Capture signal sent via BLE (${duration}s)`);
     }, [isConnected]);
 
     const disconnect = useCallback(() => {
@@ -269,14 +263,14 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             connectionUnsubscribe.current = null;
         }
 
-        TCPService.disconnect();
+        BLEService.disconnect();
         setIsConnected(false);
         setDeviceRole(null);
 
-        if (isRecording) {
+        if (isRecordingRef.current) {
             stopRecording();
         }
-    }, [isRecording]);
+    }, []);
 
     const startRecording = useCallback(async () => {
         if (!cameraRef.current) {
@@ -286,20 +280,20 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
 
         try {
             setIsRecording(true);
+            isRecordingRef.current = true;
             videoSegments.current = [];
 
             console.log('🎥 Started continuous recording');
 
             // Funkcja rekurencyjna do nagrywania segmentów
-            const recordSegment = async () => {
-                if (!cameraRef.current) {
-                    console.warn('Camera ref lost');
+            const recordSegment = async (): Promise<void> => {
+                // Sprawdź aktualną wartość z ref (nie z closure)
+                if (!isRecordingRef.current || !cameraRef.current) {
+                    console.log('Recording stopped or camera lost');
                     return;
                 }
 
                 try {
-                    const segmentUri = `${FileSystem.documentDirectory}temp_${Date.now()}.mp4`;
-
                     // Rozpocznij nagrywanie segmentu
                     const video = await cameraRef.current.recordAsync({
                         maxDuration: SEGMENT_DURATION,
@@ -336,31 +330,36 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                         console.log(`📹 Buffer: ${videoSegments.current.length} segments`);
                     }
 
-                    // Kontynuuj nagrywanie następnego segmentu
-                    if (isRecording) {
-                        recordSegment();
+                    // Kontynuuj nagrywanie następnego segmentu tylko jeśli nadal nagrywamy
+                    if (isRecordingRef.current) {
+                        await recordSegment();
                     }
                 } catch (error) {
                     console.error('Segment recording error:', error);
-                    if (isRecording) {
+                    if (isRecordingRef.current) {
                         // Spróbuj ponownie po 1 sekundzie
-                        setTimeout(recordSegment, 1000);
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        if (isRecordingRef.current) {
+                            await recordSegment();
+                        }
                     }
                 }
             };
 
             // Rozpocznij pierwszy segment
-            recordSegment();
+            await recordSegment();
 
         } catch (error) {
             console.error('Failed to start recording:', error);
             Alert.alert('Błąd', 'Nie udało się rozpocząć nagrywania');
             setIsRecording(false);
+            isRecordingRef.current = false;
         }
-    }, [isRecording]);
+    }, []);
 
     const stopRecording = useCallback(async () => {
         setIsRecording(false);
+        isRecordingRef.current = false;
 
         if (cameraRef.current) {
             try {
