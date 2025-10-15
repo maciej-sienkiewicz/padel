@@ -1,6 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import { ArrowLeft, QrCode, ScanLine, Wifi, Server } from 'lucide-react-native';
+import { ArrowLeft, Server, Wifi } from 'lucide-react-native';
 import React, { useState, useEffect } from 'react';
 import {
     View,
@@ -14,8 +14,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import QRCode from 'react-native-qrcode-svg';
 
 import Colors from '@/constants/colors';
 import { useRecording } from '@/contexts/RecordingContext';
@@ -25,13 +23,9 @@ export default function PairingScreen() {
     const params = useLocalSearchParams();
     const role = params.role as 'camera' | 'remote';
 
-    const { startAsCamera, connectToCamera, serverAddress, isConnected } = useRecording();
+    const { startAsCamera, connectToCamera, isConnected } = useRecording();
 
-    const [permission, requestPermission] = useCameraPermissions();
-    const [scanning, setScanning] = useState(false);
-    const [manualAddress, setManualAddress] = useState('');
     const [isLoading, setIsLoading] = useState(false);
-    const [showServerInput, setShowServerInput] = useState(true);
 
     const handleBack = () => {
         if (Platform.OS !== 'web') {
@@ -40,12 +34,7 @@ export default function PairingScreen() {
         router.back();
     };
 
-    const handleConnectToServer = async () => {
-        if (!manualAddress.trim()) {
-            Alert.alert('Błąd', 'Wprowadź adres serwera');
-            return;
-        }
-
+    const handleStartCamera = async () => {
         if (Platform.OS !== 'web') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
@@ -53,26 +42,16 @@ export default function PairingScreen() {
         setIsLoading(true);
 
         try {
-            if (role === 'camera') {
-                // Kamera też łączy się z serwerem
-                await startAsCamera();
-                await connectToCamera(manualAddress.trim());
+            // Uruchom tryb kamery
+            await startAsCamera();
 
-                // Poczekaj chwilę i przejdź do ekranu kamery
-                setTimeout(() => {
-                    router.push('/camera');
-                }, 1000);
-            } else {
-                // Pilot łączy się z serwerem
-                await connectToCamera(manualAddress.trim());
-
-                // Poczekaj chwilę i przejdź do ekranu pilota
-                setTimeout(() => {
-                    router.push('/remote');
-                }, 1000);
-            }
+            // Poczekaj chwilę i przejdź do ekranu kamery
+            setTimeout(() => {
+                router.replace('/camera');
+            }, 500);
         } catch (error) {
-            console.error('Connection failed:', error);
+            console.error('Failed to start camera:', error);
+            Alert.alert('Błąd', 'Nie udało się uruchomić trybu kamery');
         } finally {
             setIsLoading(false);
         }
@@ -91,9 +70,7 @@ export default function PairingScreen() {
                             <ArrowLeft size={24} color={Colors.text} />
                         </View>
                     </TouchableOpacity>
-                    <Text style={styles.headerTitle}>
-                        {role === 'camera' ? 'Tryb Kamera' : 'Tryb Pilot'}
-                    </Text>
+                    <Text style={styles.headerTitle}>Tryb Kamera</Text>
                     <View style={styles.placeholder} />
                 </View>
 
@@ -105,53 +82,34 @@ export default function PairingScreen() {
                         <View style={styles.iconCircle}>
                             <Server size={48} color={Colors.primary} />
                         </View>
-                        <Text style={styles.title}>Połącz z serwerem</Text>
+                        <Text style={styles.title}>Tryb Kamera</Text>
                         <Text style={styles.subtitle}>
-                            {role === 'camera'
-                                ? 'Wpisz adres serwera, aby zarejestrować kamerę'
-                                : 'Wpisz adres serwera, aby sterować kamerą'
-                            }
+                            Uruchom hotspot WiFi na tym telefonie, aby pilot mógł się połączyć
                         </Text>
                     </View>
 
                     <View style={styles.serverSetupContainer}>
                         <View style={styles.infoBox}>
-                            <Text style={styles.infoTitle}>ℹ️ Jak uruchomić serwer?</Text>
-                            <Text style={styles.infoText}>1. Na komputerze otwórz terminal</Text>
-                            <Text style={styles.infoText}>2. Przejdź do folderu: cd padel-server</Text>
-                            <Text style={styles.infoText}>3. Uruchom: node server.js</Text>
-                            <Text style={styles.infoText}>4. Skopiuj adres IP (np. 192.168.1.5:8080)</Text>
-                            <Text style={styles.infoText}>5. Wklej poniżej</Text>
+                            <Text style={styles.infoTitle}>📱 Jak skonfigurować?</Text>
+                            <Text style={styles.infoText}>1. Naciśnij "Uruchom kamerę" poniżej</Text>
+                            <Text style={styles.infoText}>2. Włącz hotspot WiFi w ustawieniach telefonu</Text>
+                            <Text style={styles.infoText}>3. Zapamiętaj nazwę sieci i hasło</Text>
+                            <Text style={styles.infoText}>4. Wróć do aplikacji i pokaż QR kod</Text>
+                            <Text style={styles.infoText}>5. Pilot: połącz się z hotspotem i skanuj QR</Text>
                         </View>
 
                         <View style={styles.inputSection}>
-                            <Text style={styles.inputLabel}>Adres serwera:</Text>
-                            <View style={styles.inputContainer}>
-                                <Wifi size={20} color={Colors.textMuted} />
-                                <TextInput
-                                    style={styles.input}
-                                    placeholder="192.168.1.5:8080"
-                                    placeholderTextColor={Colors.textMuted}
-                                    value={manualAddress}
-                                    onChangeText={setManualAddress}
-                                    autoCapitalize="none"
-                                    autoCorrect={false}
-                                    keyboardType="url"
-                                    editable={!isLoading}
-                                />
-                            </View>
-
                             <TouchableOpacity
                                 style={[
                                     styles.connectButton,
-                                    (!manualAddress.trim() || isLoading) && styles.connectButtonDisabled
+                                    isLoading && styles.connectButtonDisabled
                                 ]}
-                                onPress={handleConnectToServer}
-                                disabled={!manualAddress.trim() || isLoading}
+                                onPress={handleStartCamera}
+                                disabled={isLoading}
                             >
                                 <LinearGradient
                                     colors={
-                                        !manualAddress.trim() || isLoading
+                                        isLoading
                                             ? [Colors.textMuted, Colors.backgroundLight]
                                             : [Colors.primary, Colors.primaryDark]
                                     }
@@ -160,48 +118,26 @@ export default function PairingScreen() {
                                     style={styles.connectButtonGradient}
                                 >
                                     <Text style={styles.connectButtonText}>
-                                        {isLoading ? 'Łączenie...' : 'Połącz z serwerem'}
+                                        {isLoading ? 'Uruchamianie...' : 'Uruchom kamerę'}
                                     </Text>
                                 </LinearGradient>
                             </TouchableOpacity>
                         </View>
                     </View>
 
-                    <View style={styles.examplesContainer}>
-                        <Text style={styles.examplesTitle}>Przykłady adresów:</Text>
-                        <TouchableOpacity
-                            style={styles.exampleButton}
-                            onPress={() => setManualAddress('192.168.1.5:8080')}
-                        >
-                            <Text style={styles.exampleText}>192.168.1.5:8080</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.exampleButton}
-                            onPress={() => setManualAddress('192.168.0.10:8080')}
-                        >
-                            <Text style={styles.exampleText}>192.168.0.10:8080</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.exampleButton}
-                            onPress={() => setManualAddress('10.0.0.5:8080')}
-                        >
-                            <Text style={styles.exampleText}>10.0.0.5:8080</Text>
-                        </TouchableOpacity>
-                    </View>
-
                     <View style={styles.tipsContainer}>
                         <Text style={styles.tipsTitle}>💡 Wskazówki:</Text>
                         <Text style={styles.tipText}>
-                            • Upewnij się, że serwer jest uruchomiony na komputerze
+                            • Kamera nie wymaga internetu - tylko hotspot
                         </Text>
                         <Text style={styles.tipText}>
-                            • Telefony i komputer muszą być w tej samej sieci WiFi
+                            • Hotspot: Ustawienia → Sieć → Hotspot WiFi
                         </Text>
                         <Text style={styles.tipText}>
-                            • Nie wyłączaj komputera podczas meczu
+                            • Pilot musi się połączyć z hotspotem kamery
                         </Text>
                         <Text style={styles.tipText}>
-                            • Port zawsze wynosi :8080
+                            • Wszystko działa lokalnie - idealne na kort!
                         </Text>
                     </View>
                 </ScrollView>

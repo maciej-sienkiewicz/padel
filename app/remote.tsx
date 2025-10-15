@@ -16,33 +16,29 @@ import * as Haptics from 'expo-haptics';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
 import Colors from '@/constants/colors';
-import RemotePilotService from '@/services/RemotePilotService';
+import { useRecording } from '@/contexts/RecordingContext';
 
 export default function RemoteScreen() {
     const router = useRouter();
     const [permission, requestPermission] = useCameraPermissions();
 
+    const {
+        isConnected,
+        serverAddress,
+        connectToCamera,
+        sendCaptureSignal,
+        disconnect: contextDisconnect,
+    } = useRecording();
+
     const [scanning, setScanning] = useState(false);
-    const [connected, setConnected] = useState(false);
-    const [cameraIP, setCameraIP] = useState('');
-    const [pilotID, setPilotID] = useState('');
     const [sending, setSending] = useState(false);
-
-    useEffect(() => {
-        // Generuj pilot ID
-        const id = RemotePilotService.getPilotID();
-        setPilotID(id);
-
-        return () => {
-            RemotePilotService.disconnect();
-        };
-    }, []);
+    const [scannedAddress, setScannedAddress] = useState('');
 
     const handleBack = () => {
         if (Platform.OS !== 'web') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         }
-        RemotePilotService.disconnect();
+        contextDisconnect();
         router.back();
     };
 
@@ -62,53 +58,36 @@ export default function RemoteScreen() {
     };
 
     const handleQRScanned = async ({ data }: { data: string }) => {
-        if (connected || sending) return;
+        if (isConnected || sending) return;
 
         console.log('QR scanned:', data);
-
-        // Parse QR data (format: "SSID:password:serverIP")
-        const parts = data.split(':');
-        if (parts.length < 3) {
-            Alert.alert('Błąd', 'Nieprawidłowy kod QR');
-            return;
-        }
-
-        const serverIP = parts[2];
-        console.log('Server IP:', serverIP);
-
+        setScannedAddress(data);
         setScanning(false);
         setSending(true);
 
         try {
-            const success = await RemotePilotService.connectToServer(serverIP);
+            await connectToCamera(data);
 
-            if (success) {
-                setConnected(true);
-                setCameraIP(serverIP);
-
-                if (Platform.OS !== 'web') {
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                }
-
-                Alert.alert(
-                    'Połączono!',
-                    `Pilot ${pilotID} połączony z kamerą`,
-                    [{ text: 'OK' }]
-                );
-            } else {
-                Alert.alert('Błąd', 'Nie udało się połączyć z kamerą');
+            if (Platform.OS !== 'web') {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             }
+
+            Alert.alert(
+                'Połączono!',
+                `Pilot połączony z serwerem`,
+                [{ text: 'OK' }]
+            );
         } catch (error) {
             console.error('Connection error:', error);
-            Alert.alert('Błąd', 'Nie udało się połączyć z kamerą');
+            Alert.alert('Błąd', 'Nie udało się połączyć z serwerem');
         } finally {
             setSending(false);
         }
     };
 
     const handleCapture = async (minutes: number) => {
-        if (!connected) {
-            Alert.alert('Błąd', 'Nie połączono z kamerą');
+        if (!isConnected) {
+            Alert.alert('Błąd', 'Nie połączono z serwerem');
             return;
         }
 
@@ -119,21 +98,18 @@ export default function RemoteScreen() {
         setSending(true);
 
         try {
-            const success = await RemotePilotService.sendCapture(minutes);
+            const seconds = minutes * 60;
+            sendCaptureSignal(seconds);
 
-            if (success) {
-                if (Platform.OS !== 'web') {
-                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                }
-
-                Alert.alert(
-                    'Wysłano!',
-                    `Sygnał ${minutes} min zapisany`,
-                    [{ text: 'OK' }]
-                );
-            } else {
-                Alert.alert('Błąd', 'Nie udało się wysłać sygnału');
+            if (Platform.OS !== 'web') {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             }
+
+            Alert.alert(
+                'Wysłano!',
+                `Sygnał ${minutes} min zapisany`,
+                [{ text: 'OK' }]
+            );
         } catch (error) {
             console.error('Capture error:', error);
             Alert.alert('Błąd', 'Nie udało się wysłać sygnału');
@@ -143,9 +119,8 @@ export default function RemoteScreen() {
     };
 
     const handleDisconnect = () => {
-        RemotePilotService.disconnect();
-        setConnected(false);
-        setCameraIP('');
+        contextDisconnect();
+        setScannedAddress('');
     };
 
     return (
@@ -155,7 +130,6 @@ export default function RemoteScreen() {
                 style={StyleSheet.absoluteFillObject}
             />
             <SafeAreaView style={styles.safeArea}>
-                {/* Header */}
                 <View style={styles.header}>
                     <TouchableOpacity style={styles.backButton} onPress={handleBack}>
                         <View style={styles.iconButton}>
@@ -167,21 +141,19 @@ export default function RemoteScreen() {
                 </View>
 
                 <View style={styles.content}>
-                    {/* Status Card */}
                     <View style={styles.statusCard}>
                         <View style={styles.statusRow}>
-                            <Wifi size={20} color={connected ? '#10B981' : Colors.textMuted} />
+                            <Wifi size={20} color={isConnected ? '#10B981' : Colors.textMuted} />
                             <Text style={styles.statusText}>
-                                {connected ? 'Połączony' : 'Niepołączony'}
+                                {isConnected ? 'Połączony' : 'Niepołączony'}
                             </Text>
                         </View>
-                        {connected && (
-                            <Text style={styles.statusSubtext}>Kamera: {cameraIP}</Text>
+                        {isConnected && scannedAddress && (
+                            <Text style={styles.statusSubtext}>Serwer: {scannedAddress}</Text>
                         )}
-                        <Text style={styles.pilotIDText}>ID: {pilotID}</Text>
                     </View>
 
-                    {!connected && !scanning && (
+                    {!isConnected && !scanning && (
                         <View style={styles.scanSection}>
                             <View style={styles.instructionCard}>
                                 <CameraIcon size={48} color="#7C3AED" />
@@ -237,9 +209,8 @@ export default function RemoteScreen() {
                         </View>
                     )}
 
-                    {connected && !scanning && (
+                    {isConnected && !scanning && (
                         <View style={styles.controlsSection}>
-                            {/* 2 Minutes Button */}
                             <TouchableOpacity
                                 style={styles.captureButton}
                                 onPress={() => handleCapture(2)}
@@ -265,7 +236,6 @@ export default function RemoteScreen() {
                                 </LinearGradient>
                             </TouchableOpacity>
 
-                            {/* 5 Minutes Button */}
                             <TouchableOpacity
                                 style={styles.captureButton}
                                 onPress={() => handleCapture(5)}
@@ -291,7 +261,6 @@ export default function RemoteScreen() {
                                 </LinearGradient>
                             </TouchableOpacity>
 
-                            {/* Disconnect Button */}
                             <TouchableOpacity
                                 style={styles.disconnectButton}
                                 onPress={handleDisconnect}
@@ -356,7 +325,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        marginBottom: 8,
     },
     statusText: {
         fontSize: 16,
@@ -365,12 +333,6 @@ const styles = StyleSheet.create({
     },
     statusSubtext: {
         fontSize: 14,
-        color: Colors.textMuted,
-        marginTop: 4,
-        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    },
-    pilotIDText: {
-        fontSize: 12,
         color: Colors.textMuted,
         marginTop: 8,
         fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',

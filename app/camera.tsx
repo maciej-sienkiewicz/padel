@@ -1,7 +1,7 @@
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Circle, Wifi, Save } from 'lucide-react-native';
-import React, { useRef, useEffect } from 'react';
+import { ArrowLeft, Circle, Wifi, Save, QrCode } from 'lucide-react-native';
+import React, { useRef, useEffect, useState } from 'react';
 import {
     View,
     Text,
@@ -10,10 +10,12 @@ import {
     Platform,
     Animated,
     Alert,
+    Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
+import QRCode from 'react-native-qrcode-svg';
 
 import Colors from '@/constants/colors';
 import { useRecording } from '@/contexts/RecordingContext';
@@ -28,8 +30,18 @@ export default function CameraScreen() {
         stopRecording,
         serverAddress,
         highlights,
+        setCameraReference,
     } = useRecording();
+
     const pulseAnim = useRef(new Animated.Value(1)).current;
+    const [showQR, setShowQR] = useState(false);
+    const cameraRef = useRef<any>(null);
+
+    useEffect(() => {
+        if (cameraRef.current) {
+            setCameraReference(cameraRef.current);
+        }
+    }, [cameraRef.current, setCameraReference]);
 
     useEffect(() => {
         if (isRecording) {
@@ -81,9 +93,20 @@ export default function CameraScreen() {
     const handleStartRecording = () => {
         if (!isConnected) {
             Alert.alert(
-                'Brak połączenia',
-                'Połącz najpierw pilota przed rozpoczęciem nagrywania',
-                [{ text: 'OK' }]
+                'Brak pilota',
+                'Poczekaj aż pilot się połączy lub rozpocznij nagrywanie bez pilota (możesz dodać pilota później)',
+                [
+                    { text: 'Poczekaj', style: 'cancel' },
+                    {
+                        text: 'Rozpocznij mimo to',
+                        onPress: () => {
+                            if (Platform.OS !== 'web') {
+                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+                            }
+                            startRecording();
+                        }
+                    }
+                ]
             );
             return;
         }
@@ -106,6 +129,13 @@ export default function CameraScreen() {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         }
         router.push('/highlights');
+    };
+
+    const handleShowQR = () => {
+        if (Platform.OS !== 'web') {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        }
+        setShowQR(true);
     };
 
     if (!permission) {
@@ -153,7 +183,11 @@ export default function CameraScreen() {
 
     return (
         <View style={styles.container}>
-            <CameraView style={styles.camera} facing={'back' as CameraType}>
+            <CameraView
+                style={styles.camera}
+                facing={'back' as CameraType}
+                ref={cameraRef}
+            >
                 <LinearGradient
                     colors={['rgba(10, 14, 39, 0.8)', 'transparent', 'rgba(10, 14, 39, 0.9)']}
                     style={StyleSheet.absoluteFillObject}
@@ -170,15 +204,15 @@ export default function CameraScreen() {
                             <View
                                 style={[
                                     styles.statusDot,
-                                    { backgroundColor: isConnected ? Colors.success : Colors.textMuted },
+                                    { backgroundColor: isConnected ? Colors.success : Colors.warning },
                                 ]}
                             />
                             <Text style={styles.statusText}>
-                                {isConnected ? 'Połączono' : 'Oczekiwanie'}
+                                {isConnected ? 'Pilot OK' : 'Bez pilota'}
                             </Text>
                             <Wifi
                                 size={20}
-                                color={isConnected ? Colors.success : Colors.textMuted}
+                                color={isConnected ? Colors.success : Colors.warning}
                             />
                         </View>
 
@@ -210,14 +244,21 @@ export default function CameraScreen() {
                             </Animated.View>
                         )}
 
-                        {!isConnected && !isRecording && (
+                        {!isRecording && (
                             <View style={styles.warningContainer}>
                                 <Text style={styles.warningText}>
-                                    Oczekiwanie na połączenie z pilotem...
+                                    {isConnected ? 'Gotowy do nagrywania' : 'Oczekiwanie na pilota'}
                                 </Text>
                                 <Text style={styles.warningSubtext}>
-                                    Adres: {serverAddress}
+                                    Adres hotspotu: {serverAddress || 'Ładowanie...'}
                                 </Text>
+                                <TouchableOpacity
+                                    style={styles.qrButton}
+                                    onPress={handleShowQR}
+                                >
+                                    <QrCode size={20} color={Colors.primary} />
+                                    <Text style={styles.qrButtonText}>Pokaż QR dla pilota</Text>
+                                </TouchableOpacity>
                             </View>
                         )}
                     </View>
@@ -225,19 +266,11 @@ export default function CameraScreen() {
                     <View style={styles.footer}>
                         {!isRecording ? (
                             <TouchableOpacity
-                                style={[
-                                    styles.recordButton,
-                                    !isConnected && styles.recordButtonDisabled,
-                                ]}
+                                style={styles.recordButton}
                                 onPress={handleStartRecording}
-                                disabled={!isConnected}
                             >
                                 <LinearGradient
-                                    colors={
-                                        isConnected
-                                            ? [Colors.primary, Colors.primaryDark]
-                                            : [Colors.textMuted, Colors.backgroundLight]
-                                    }
+                                    colors={[Colors.primary, Colors.primaryDark]}
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 1 }}
                                     style={styles.recordButtonGradient}
@@ -260,6 +293,61 @@ export default function CameraScreen() {
                     </View>
                 </SafeAreaView>
             </CameraView>
+
+            {/* QR Code Modal */}
+            <Modal
+                visible={showQR}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setShowQR(false)}
+            >
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setShowQR(false)}
+                >
+                    <View style={styles.qrModal}>
+                        <Text style={styles.qrModalTitle}>Zeskanuj tym kodem</Text>
+                        <Text style={styles.qrModalSubtitle}>
+                            Użyj pilota (drugi telefon) aby zeskanować
+                        </Text>
+
+                        <View style={styles.qrContainer}>
+                            {serverAddress ? (
+                                <QRCode
+                                    value={serverAddress}
+                                    size={250}
+                                    backgroundColor="white"
+                                    color="black"
+                                />
+                            ) : (
+                                <Text style={styles.qrError}>Ładowanie adresu...</Text>
+                            )}
+                        </View>
+
+                        <Text style={styles.qrAddress}>{serverAddress}</Text>
+
+                        <View style={styles.qrInstructions}>
+                            <Text style={styles.qrInstructionText}>
+                                1. Pilot: Połącz się z hotspotem tego telefonu
+                            </Text>
+                            <Text style={styles.qrInstructionText}>
+                                2. Pilot: Otwórz aplikację i wybierz "Pilot"
+                            </Text>
+                            <Text style={styles.qrInstructionText}>
+                                3. Pilot: Zeskanuj ten kod QR
+                            </Text>
+                        </View>
+
+                        <TouchableOpacity
+                            style={styles.qrCloseButton}
+                            onPress={() => setShowQR(false)}
+                        >
+                            <Text style={styles.qrCloseButtonText}>Zamknij</Text>
+                        </TouchableOpacity>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
         </View>
     );
 }
@@ -357,11 +445,11 @@ const styles = StyleSheet.create({
         letterSpacing: 2,
     },
     warningContainer: {
-        backgroundColor: 'rgba(255, 184, 0, 0.2)',
+        backgroundColor: 'rgba(0, 217, 255, 0.2)',
         borderRadius: 20,
         padding: 24,
         borderWidth: 2,
-        borderColor: Colors.warning,
+        borderColor: Colors.primary,
         alignItems: 'center',
     },
     warningText: {
@@ -376,6 +464,23 @@ const styles = StyleSheet.create({
         fontSize: 14,
         textAlign: 'center',
         fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+        marginBottom: 16,
+    },
+    qrButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: 'rgba(0, 217, 255, 0.3)',
+        paddingHorizontal: 20,
+        paddingVertical: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: Colors.primary,
+    },
+    qrButtonText: {
+        color: Colors.text,
+        fontSize: 14,
+        fontWeight: '600',
     },
     footer: {
         paddingHorizontal: 20,
@@ -386,9 +491,6 @@ const styles = StyleSheet.create({
         width: '100%',
         borderRadius: 32,
         overflow: 'hidden',
-    },
-    recordButtonDisabled: {
-        opacity: 0.6,
     },
     recordButtonGradient: {
         flexDirection: 'row',
@@ -461,5 +563,76 @@ const styles = StyleSheet.create({
         color: Colors.text,
         fontSize: 18,
         fontWeight: '700',
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: 'rgba(0, 0, 0, 0.9)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    qrModal: {
+        backgroundColor: Colors.backgroundLight,
+        borderRadius: 24,
+        padding: 32,
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        maxWidth: 400,
+        width: '100%',
+    },
+    qrModalTitle: {
+        fontSize: 24,
+        fontWeight: '700',
+        color: Colors.text,
+        marginBottom: 8,
+    },
+    qrModalSubtitle: {
+        fontSize: 14,
+        color: Colors.textMuted,
+        marginBottom: 24,
+        textAlign: 'center',
+    },
+    qrContainer: {
+        backgroundColor: 'white',
+        padding: 20,
+        borderRadius: 16,
+        marginBottom: 20,
+    },
+    qrError: {
+        color: Colors.accent,
+        fontSize: 14,
+        padding: 40,
+    },
+    qrAddress: {
+        color: Colors.primary,
+        fontSize: 16,
+        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+        marginBottom: 24,
+        textAlign: 'center',
+    },
+    qrInstructions: {
+        backgroundColor: 'rgba(0, 217, 255, 0.1)',
+        borderRadius: 12,
+        padding: 16,
+        marginBottom: 24,
+        width: '100%',
+    },
+    qrInstructionText: {
+        color: Colors.text,
+        fontSize: 13,
+        marginBottom: 8,
+        lineHeight: 20,
+    },
+    qrCloseButton: {
+        backgroundColor: Colors.primary,
+        paddingHorizontal: 32,
+        paddingVertical: 12,
+        borderRadius: 12,
+    },
+    qrCloseButtonText: {
+        color: Colors.text,
+        fontSize: 16,
+        fontWeight: '600',
     },
 });
