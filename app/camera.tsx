@@ -1,6 +1,6 @@
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Circle, Bluetooth, Save } from 'lucide-react-native';
+import { ArrowLeft, Circle, Wifi, Save } from 'lucide-react-native';
 import React, { useRef, useEffect, useState } from 'react';
 import {
     View,
@@ -26,12 +26,16 @@ export default function CameraScreen() {
         isConnected,
         startRecording,
         stopRecording,
+        serverAddress,
         highlights,
         setCameraReference,
+        startAsCamera,     // ← Upewnij się że to jest!
+        disconnect,        // ← Upewnij się że to jest!
     } = useRecording();
 
     const pulseAnim = useRef(new Animated.Value(1)).current;
     const cameraRef = useRef<any>(null);
+    const [isCameraReady, setIsCameraReady] = useState(false);
 
     useEffect(() => {
         if (cameraRef.current) {
@@ -59,6 +63,28 @@ export default function CameraScreen() {
             pulseAnim.setValue(1);
         }
     }, [isRecording, pulseAnim]);
+
+    // ← TUTAJ DODAJ TEN NOWY useEffect!
+    useEffect(() => {
+        console.log('📹 Camera screen mounted, starting camera mode...');
+
+        const initCamera = async () => {
+            try {
+                await startAsCamera();
+                console.log('✅ Camera mode started');
+            } catch (error) {
+                console.error('❌ Failed to start camera:', error);
+                Alert.alert('Błąd', 'Nie udało się uruchomić trybu kamery. Sprawdź internet.');
+            }
+        };
+
+        initCamera();
+
+        return () => {
+            console.log('👋 Camera screen unmounting');
+            disconnect();
+        };
+    }, []);
 
     const handleBack = () => {
         if (isRecording) {
@@ -174,8 +200,17 @@ export default function CameraScreen() {
         <View style={styles.container}>
             <CameraView
                 style={styles.camera}
-                facing={'back' as CameraType}
+                mode="video"  // ← KLUCZOWE! Bez tego recordAsync() nie działa!
+                facing={'back'}
                 ref={cameraRef}
+                onCameraReady={() => {
+                    console.log('📸 Camera onCameraReady callback FIRED!');
+                    setIsCameraReady(true);
+                }}
+                onMountError={(error) => {
+                    console.error('❌ Camera mount error:', error);
+                    setIsCameraReady(false);
+                }}
             >
                 <LinearGradient
                     colors={['rgba(10, 14, 39, 0.8)', 'transparent', 'rgba(10, 14, 39, 0.9)']}
@@ -199,7 +234,7 @@ export default function CameraScreen() {
                             <Text style={styles.statusText}>
                                 {isConnected ? 'Pilot OK' : 'Bez pilota'}
                             </Text>
-                            <Bluetooth
+                            <Wifi
                                 size={20}
                                 color={isConnected ? Colors.success : Colors.warning}
                             />
@@ -238,16 +273,21 @@ export default function CameraScreen() {
                                 <Text style={styles.warningText}>
                                     {isConnected ? 'Gotowy do nagrywania' : 'Oczekiwanie na pilota'}
                                 </Text>
-                                <Text style={styles.warningSubtext}>
-                                    Połączenie przez Bluetooth
-                                </Text>
-                                {!isConnected && (
-                                    <View style={styles.bleInfo}>
-                                        <Bluetooth size={24} color={Colors.primary} />
-                                        <Text style={styles.bleInfoText}>
-                                            Pilot automatycznie się połączy
+                                {serverAddress && (
+                                    <>
+                                        <Text style={styles.sessionLabel}>Kod sesji:</Text>
+                                        <View style={styles.sessionCodeContainer}>
+                                            <Text style={styles.sessionCode}>{serverAddress}</Text>
+                                        </View>
+                                        <Text style={styles.sessionHint}>
+                                            Wpisz ten kod w aplikacji na pilocie
                                         </Text>
-                                    </View>
+                                    </>
+                                )}
+                                {!serverAddress && (
+                                    <Text style={styles.warningSubtext}>
+                                        Ładowanie...
+                                    </Text>
                                 )}
                             </View>
                         )}
@@ -386,35 +426,49 @@ const styles = StyleSheet.create({
         borderWidth: 2,
         borderColor: Colors.primary,
         alignItems: 'center',
+        minWidth: '80%',
     },
     warningText: {
         color: Colors.text,
         fontSize: 16,
         fontWeight: '700',
         textAlign: 'center',
-        marginBottom: 8,
+        marginBottom: 16,
     },
     warningSubtext: {
         color: Colors.textMuted,
         fontSize: 14,
         textAlign: 'center',
-        marginBottom: 16,
     },
-    bleInfo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 12,
-        backgroundColor: 'rgba(0, 217, 255, 0.3)',
-        paddingHorizontal: 20,
+    sessionLabel: {
+        color: Colors.textMuted,
+        fontSize: 12,
+        fontWeight: '600',
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+        marginBottom: 8,
+    },
+    sessionCodeContainer: {
+        backgroundColor: 'rgba(255, 255, 255, 0.15)',
+        paddingHorizontal: 24,
         paddingVertical: 12,
         borderRadius: 12,
+        marginBottom: 12,
         borderWidth: 1,
         borderColor: Colors.primary,
     },
-    bleInfoText: {
+    sessionCode: {
         color: Colors.text,
-        fontSize: 14,
-        fontWeight: '600',
+        fontSize: 32,
+        fontWeight: '800',
+        letterSpacing: 4,
+        fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    },
+    sessionHint: {
+        color: Colors.textMuted,
+        fontSize: 12,
+        textAlign: 'center',
+        fontStyle: 'italic',
     },
     footer: {
         paddingHorizontal: 20,

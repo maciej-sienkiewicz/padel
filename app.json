@@ -14,7 +14,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.padel",
+      "bundleIdentifier": "pl.maciejsienkiewicz",
       "infoPlist": {
         "NSCameraUsageDescription": "Potrzebujemy dostępu do kamery, aby nagrywać akcje i skanować kod QR",
         "NSMicrophoneUsageDescription": "Potrzebujemy dostępu do mikrofonu, aby nagrywać dźwięk",

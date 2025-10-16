@@ -1,7 +1,7 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Bluetooth, Clock } from 'lucide-react-native';
-import React, { useState, useEffect } from 'react';
+import { ArrowLeft, Wifi, Clock } from 'lucide-react-native';
+import React, { useState } from 'react';
 import {
     View,
     Text,
@@ -10,6 +10,7 @@ import {
     Platform,
     Alert,
     ActivityIndicator,
+    TextInput,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
@@ -29,6 +30,7 @@ export default function RemoteScreen() {
 
     const [connecting, setConnecting] = useState(false);
     const [sending, setSending] = useState(false);
+    const [sessionId, setSessionId] = useState('');
 
     const handleBack = () => {
         if (Platform.OS !== 'web') {
@@ -39,6 +41,11 @@ export default function RemoteScreen() {
     };
 
     const handleConnect = async () => {
+        if (sessionId.length !== 6) {
+            Alert.alert('Błąd', 'Wpisz 6-znakowy kod sesji');
+            return;
+        }
+
         if (Platform.OS !== 'web') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         }
@@ -46,10 +53,10 @@ export default function RemoteScreen() {
         setConnecting(true);
 
         try {
-            await connectToCamera();
+            await connectToCamera(sessionId);
         } catch (error) {
             console.error('Connection error:', error);
-            Alert.alert('Błąd', 'Nie udało się połączyć z kamerą przez Bluetooth');
+            Alert.alert('Błąd', 'Nie udało się połączyć. Sprawdź kod sesji i połączenie z internetem.');
         } finally {
             setConnecting(false);
         }
@@ -77,7 +84,7 @@ export default function RemoteScreen() {
 
             Alert.alert(
                 '✅ Wysłano!',
-                `Sygnał ${minutes} min zapisany`,
+                `Sygnał ${minutes} min wysłany do kamery`,
                 [{ text: 'OK' }]
             );
         } catch (error) {
@@ -93,6 +100,7 @@ export default function RemoteScreen() {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         }
         contextDisconnect();
+        setSessionId('');
     };
 
     return (
@@ -115,9 +123,9 @@ export default function RemoteScreen() {
                 <View style={styles.content}>
                     <View style={styles.statusCard}>
                         <View style={styles.statusRow}>
-                            <Bluetooth size={20} color={isConnected ? '#10B981' : Colors.textMuted} />
+                            <Wifi size={20} color={isConnected ? '#10B981' : Colors.textMuted} />
                             <Text style={styles.statusText}>
-                                {isConnected ? 'Połączony przez Bluetooth' : 'Niepołączony'}
+                                {isConnected ? 'Połączony z kamerą' : 'Niepołączony'}
                             </Text>
                         </View>
                         {isConnected && (
@@ -128,23 +136,40 @@ export default function RemoteScreen() {
                     {!isConnected && (
                         <View style={styles.connectSection}>
                             <View style={styles.instructionCard}>
-                                <Bluetooth size={48} color="#7C3AED" />
-                                <Text style={styles.instructionTitle}>Połącz z kamerą</Text>
+                                <Text style={styles.instructionTitle}>Wpisz kod sesji</Text>
                                 <Text style={styles.instructionText}>
-                                    Upewnij się, że telefon z kamerą ma włączoną aplikację w trybie "Kamera"
+                                    6-znakowy kod wyświetlony na telefonie z kamerą
                                 </Text>
                                 <Text style={styles.instructionSubtext}>
-                                    Połączenie nastąpi automatycznie przez Bluetooth
+                                    Przykład: ABC123
                                 </Text>
                             </View>
 
+                            <TextInput
+                                style={styles.sessionInput}
+                                placeholder="ABC123"
+                                placeholderTextColor={Colors.textMuted}
+                                value={sessionId}
+                                onChangeText={(text) => setSessionId(text.toUpperCase())}
+                                autoCapitalize="characters"
+                                maxLength={6}
+                                autoCorrect={false}
+                            />
+
                             <TouchableOpacity
-                                style={styles.connectButton}
+                                style={[
+                                    styles.connectButton,
+                                    (connecting || sessionId.length !== 6) && styles.connectButtonDisabled
+                                ]}
                                 onPress={handleConnect}
-                                disabled={connecting}
+                                disabled={connecting || sessionId.length !== 6}
                             >
                                 <LinearGradient
-                                    colors={['#7C3AED', '#5B21B6']}
+                                    colors={
+                                        connecting || sessionId.length !== 6
+                                            ? ['#666', '#444']
+                                            : ['#7C3AED', '#5B21B6']
+                                    }
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 1 }}
                                     style={styles.connectButtonGradient}
@@ -152,12 +177,14 @@ export default function RemoteScreen() {
                                     {connecting ? (
                                         <>
                                             <ActivityIndicator color={Colors.text} />
-                                            <Text style={styles.connectButtonText}>Szukam kamery...</Text>
+                                            <Text style={styles.connectButtonText}>Łączę...</Text>
                                         </>
                                     ) : (
                                         <>
-                                            <Bluetooth size={24} color={Colors.text} />
-                                            <Text style={styles.connectButtonText}>Połącz przez Bluetooth</Text>
+                                            <Wifi size={24} color={Colors.text} />
+                                            <Text style={styles.connectButtonText}>
+                                                {sessionId.length === 6 ? 'Połącz' : 'Wpisz kod'}
+                                            </Text>
                                         </>
                                     )}
                                 </LinearGradient>
@@ -165,10 +192,10 @@ export default function RemoteScreen() {
 
                             <View style={styles.infoBox}>
                                 <Text style={styles.infoText}>
-                                    💡 Upewnij się że Bluetooth jest włączony
+                                    💡 Upewnij się że oba telefony mają internet
                                 </Text>
                                 <Text style={styles.infoText}>
-                                    💡 Urządzenia powinny być w zasięgu do 30m
+                                    💡 Kod jest ważny przez całą sesję nagrywania
                                 </Text>
                             </View>
                         </View>
@@ -320,7 +347,6 @@ const styles = StyleSheet.create({
         fontSize: 24,
         fontWeight: '700',
         color: Colors.text,
-        marginTop: 16,
         marginBottom: 12,
     },
     instructionText: {
@@ -336,10 +362,27 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         fontWeight: '600',
     },
+    sessionInput: {
+        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        borderRadius: 12,
+        paddingHorizontal: 20,
+        paddingVertical: 16,
+        fontSize: 24,
+        fontWeight: '700',
+        color: Colors.text,
+        textAlign: 'center',
+        letterSpacing: 4,
+        marginBottom: 20,
+        borderWidth: 2,
+        borderColor: Colors.primary,
+    },
     connectButton: {
         borderRadius: 16,
         overflow: 'hidden',
         marginBottom: 20,
+    },
+    connectButtonDisabled: {
+        opacity: 0.5,
     },
     connectButtonGradient: {
         flexDirection: 'row',

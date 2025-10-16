@@ -4,8 +4,9 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { Platform, Alert } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
-import BLEService from '@/services/BLEService';
-import type { P2PMessage } from '@/services/BLEService';
+import FirebaseService from '@/services/FirebaseService';
+import { firebaseConfig } from '@/config/firebase';
+import type { P2PMessage } from '@/services/FirebaseService';
 
 interface VideoSegment {
     uri: string;
@@ -19,7 +20,7 @@ interface Highlight {
     uri: string;
 }
 
-const BUFFER_DURATION = 300; // 5 minut w sekundach (zwiększone z 2 do 5)
+const BUFFER_DURATION = 300; // 5 minut w sekundach
 const SEGMENT_DURATION = 10; // 10 sekund na segment
 
 export const [RecordingProvider, useRecording] = createContextHook(() => {
@@ -37,8 +38,16 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
     const messageUnsubscribe = useRef<(() => void) | null>(null);
     const connectionUnsubscribe = useRef<(() => void) | null>(null);
 
-    // Załaduj zapisane highlighty przy starcie
+    // Inicjalizuj Firebase i załaduj highlighty przy starcie
     useEffect(() => {
+        // Inicjalizuj Firebase
+        try {
+            FirebaseService.initialize(firebaseConfig);
+            console.log('✅ Firebase initialized');
+        } catch (error) {
+            console.error('❌ Firebase initialization error:', error);
+        }
+
         loadHighlights();
 
         return () => {
@@ -170,13 +179,13 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                 }
             }
 
-            BLEService.setDeviceRole('camera');
-            const address = await BLEService.startAsCamera();
-            setServerAddress(address);
+            FirebaseService.setDeviceRole('camera');
+            const sessionId = await FirebaseService.startAsCamera();
+            setServerAddress(sessionId); // Session ID (np. "ABC123")
             setDeviceRole('camera');
 
             // Nasłuchuj wiadomości od pilotów
-            messageUnsubscribe.current = BLEService.onMessage((message: P2PMessage) => {
+            messageUnsubscribe.current = FirebaseService.onMessage((message: P2PMessage) => {
                 console.log('📹 Camera received:', message.type);
 
                 if (message.type === 'capture') {
@@ -189,50 +198,51 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             });
 
             // Nasłuchuj połączenia/rozłączenia pilotów
-            connectionUnsubscribe.current = BLEService.onConnection((connected) => {
+            connectionUnsubscribe.current = FirebaseService.onConnection((connected) => {
                 setIsConnected(connected);
                 if (connected) {
-                    console.log('✅ Pilot connected via BLE');
-                    Alert.alert('Połączono', 'Pilot został połączony przez Bluetooth!');
+                    console.log('✅ Pilot connected via Firebase');
+                    Alert.alert('Połączono', 'Pilot został połączony!');
                 } else {
                     console.log('❌ Pilot disconnected');
                 }
             });
 
-            console.log('✅ Camera mode ready (BLE)');
+            console.log('✅ Camera mode ready (Firebase)');
+            console.log(`🔑 Session ID: ${sessionId}`);
 
         } catch (error) {
             console.error('Failed to start camera:', error);
-            Alert.alert('Błąd', 'Nie udało się uruchomić trybu kamery');
+            Alert.alert('Błąd', 'Nie udało się uruchomić trybu kamery. Sprawdź połączenie z internetem.');
         }
     }, [cameraPermission, requestCameraPermission, captureHighlight]);
 
-    const connectToCamera = useCallback(async () => {
+    const connectToCamera = useCallback(async (sessionId: string) => {
         try {
-            BLEService.setDeviceRole('remote');
-            const connected = await BLEService.connectToCamera();
+            FirebaseService.setDeviceRole('remote');
+            const connected = await FirebaseService.connectToCamera(sessionId);
 
             if (connected) {
                 setIsConnected(true);
-                setServerAddress('BLE Connected');
+                setServerAddress('Connected');
                 setDeviceRole('remote');
 
-                messageUnsubscribe.current = BLEService.onMessage((message: P2PMessage) => {
+                messageUnsubscribe.current = FirebaseService.onMessage((message: P2PMessage) => {
                     console.log('🎮 Remote received:', message.type);
                 });
 
-                console.log('✅ Connected to camera via BLE');
-                Alert.alert('Sukces', 'Połączono z kamerą przez Bluetooth!');
+                console.log('✅ Connected to camera via Firebase');
+                Alert.alert('Sukces', 'Połączono z kamerą!');
             }
         } catch (error) {
             console.error('Failed to connect:', error);
             setIsConnected(false);
             Alert.alert(
                 'Błąd połączenia',
-                'Nie udało się połączyć z kamerą przez Bluetooth. Sprawdź czy:\n\n' +
-                '1. Kamera ma włączony Bluetooth\n' +
-                '2. Aplikacja na kamerze jest uruchomiona\n' +
-                '3. Urządzenia są blisko siebie (do 10m)'
+                'Nie udało się połączyć z kamerą. Sprawdź:\n\n' +
+                '1. Czy kod sesji jest poprawny\n' +
+                '2. Czy oba telefony mają internet\n' +
+                '3. Czy aplikacja na kamerze jest uruchomiona'
             );
         }
     }, []);
@@ -243,13 +253,13 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             return;
         }
 
-        BLEService.sendMessage({
+        FirebaseService.sendMessage({
             type: 'capture',
             timestamp: Date.now(),
             duration: duration
         });
 
-        console.log(`📤 Capture signal sent via BLE (${duration}s)`);
+        console.log(`📤 Capture signal sent via Firebase (${duration}s)`);
     }, [isConnected]);
 
     const disconnect = useCallback(() => {
@@ -263,9 +273,10 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             connectionUnsubscribe.current = null;
         }
 
-        BLEService.disconnect();
+        FirebaseService.disconnect();
         setIsConnected(false);
         setDeviceRole(null);
+        setServerAddress('');
 
         if (isRecordingRef.current) {
             stopRecording();
@@ -283,66 +294,96 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             isRecordingRef.current = true;
             videoSegments.current = [];
 
-            console.log('🎥 Started continuous recording');
+            console.log('🎥 Starting continuous recording...');
+
+            // Poczekaj dłużej na inicjalizację kamery
+            console.log('⏳ Waiting for camera to be fully ready...');
+            await new Promise(resolve => setTimeout(resolve, 2000)); // 2 sekundy!
 
             // Funkcja rekurencyjna do nagrywania segmentów
             const recordSegment = async (): Promise<void> => {
-                // Sprawdź aktualną wartość z ref (nie z closure)
                 if (!isRecordingRef.current || !cameraRef.current) {
-                    console.log('Recording stopped or camera lost');
+                    console.log('❌ Recording stopped or camera lost');
                     return;
                 }
 
-                try {
-                    // Rozpocznij nagrywanie segmentu
-                    const video = await cameraRef.current.recordAsync({
-                        maxDuration: SEGMENT_DURATION,
-                    });
+                let retryCount = 0;
+                const maxRetries = 5;
 
-                    if (video && video.uri) {
-                        const segment: VideoSegment = {
-                            uri: video.uri,
-                            timestamp: Date.now(),
-                        };
+                while (retryCount < maxRetries && isRecordingRef.current) {
+                    try {
+                        console.log(`📹 Attempting to record segment (attempt ${retryCount + 1}/${maxRetries})...`);
 
-                        videoSegments.current.push(segment);
+                        const video = await cameraRef.current.recordAsync({
+                            maxDuration: SEGMENT_DURATION,
+                        });
 
-                        // Usuń stare segmenty (starsze niż BUFFER_DURATION)
-                        const cutoffTime = Date.now() - BUFFER_DURATION * 1000;
-                        const oldSegments = videoSegments.current.filter(
-                            seg => seg.timestamp <= cutoffTime
-                        );
+                        if (video && video.uri) {
+                            console.log('✅ Segment recorded successfully');
 
-                        // Usuń pliki starych segmentów
-                        for (const oldSeg of oldSegments) {
-                            try {
-                                await FileSystem.deleteAsync(oldSeg.uri, { idempotent: true });
-                            } catch (e) {
-                                console.warn('Failed to delete old segment:', e);
+                            const segment: VideoSegment = {
+                                uri: video.uri,
+                                timestamp: Date.now(),
+                            };
+
+                            videoSegments.current.push(segment);
+
+                            const cutoffTime = Date.now() - BUFFER_DURATION * 1000;
+                            const oldSegments = videoSegments.current.filter(
+                                seg => seg.timestamp <= cutoffTime
+                            );
+
+                            for (const oldSeg of oldSegments) {
+                                try {
+                                    await FileSystem.deleteAsync(oldSeg.uri, { idempotent: true });
+                                } catch (e) {
+                                    console.warn('Failed to delete old segment:', e);
+                                }
                             }
+
+                            videoSegments.current = videoSegments.current.filter(
+                                seg => seg.timestamp > cutoffTime
+                            );
+
+                            console.log(`📹 Buffer: ${videoSegments.current.length} segments`);
+
+                            // KLUCZOWE - Daj kamerze czas na reset!
+                            console.log('⏳ Waiting 1.5s for camera reset...');
+                            await new Promise(resolve => setTimeout(resolve, 1500));
+
+                            break; // Wyjdź z retry loop
+                        }
+                    } catch (error) {
+                        retryCount++;
+                        console.error(`❌ Segment recording error (attempt ${retryCount}/${maxRetries}):`, error);
+
+                        if (retryCount >= maxRetries) {
+                            console.error('🛑 Max retries reached, stopping recording');
+                            Alert.alert(
+                                'Błąd nagrywania',
+                                'Nie udało się nagrać segmentu. Nagrywanie zatrzymane.',
+                                [
+                                    {
+                                        text: 'OK',
+                                        onPress: () => {
+                                            setIsRecording(false);
+                                            isRecordingRef.current = false;
+                                        }
+                                    }
+                                ]
+                            );
+                            return;
                         }
 
-                        // Zachowaj tylko aktualne segmenty
-                        videoSegments.current = videoSegments.current.filter(
-                            seg => seg.timestamp > cutoffTime
-                        );
+                        const waitTime = Math.min(2000 * retryCount, 5000);
+                        console.log(`⏳ Waiting ${waitTime}ms before retry...`);
+                        await new Promise(resolve => setTimeout(resolve, waitTime));
+                    }
+                }
 
-                        console.log(`📹 Buffer: ${videoSegments.current.length} segments`);
-                    }
-
-                    // Kontynuuj nagrywanie następnego segmentu tylko jeśli nadal nagrywamy
-                    if (isRecordingRef.current) {
-                        await recordSegment();
-                    }
-                } catch (error) {
-                    console.error('Segment recording error:', error);
-                    if (isRecordingRef.current) {
-                        // Spróbuj ponownie po 1 sekundzie
-                        await new Promise(resolve => setTimeout(resolve, 1000));
-                        if (isRecordingRef.current) {
-                            await recordSegment();
-                        }
-                    }
+                // Kontynuuj nagrywanie następnego segmentu
+                if (isRecordingRef.current) {
+                    await recordSegment();
                 }
             };
 
