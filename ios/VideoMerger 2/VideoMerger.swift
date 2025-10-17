@@ -5,29 +5,36 @@ import React
 @objc(VideoMerger)
 class VideoMerger: NSObject {
 
-  /**
-   * Łączy wiele plików wideo w jeden
-   * @param videoPaths - tablica ścieżek do plików MP4
-   * @param outputPath - ścieżka gdzie zapisać wynikowy plik
-   * @param resolver - Promise resolve callback
-   * @param rejecter - Promise reject callback
-   */
   @objc
   func mergeVideos(_ videoPaths: [String],
                    outputPath: String,
                    resolver: @escaping RCTPromiseResolveBlock,
                    rejecter: @escaping RCTPromiseRejectBlock) {
 
-    // Sprawdź czy są pliki do połączenia
     guard !videoPaths.isEmpty else {
       rejecter("EMPTY_INPUT", "No video paths provided", nil)
       return
     }
 
-    print("🎬 Starting video merge...")
-    print("📹 Input videos: \(videoPaths.count)")
+    // Usuń file:// prefix z ścieżek
+    let cleanedPaths = videoPaths.map { path -> String in
+      if path.hasPrefix("file://") {
+        let cleaned = path.replacingOccurrences(of: "file://", with: "")
+        print("🧹 Cleaned path: \(path) -> \(cleaned)")
+        return cleaned
+      }
+      print("✅ Path already clean: \(path)")
+      return path
+    }
+    
+    let cleanedOutputPath = outputPath.hasPrefix("file://") 
+      ? outputPath.replacingOccurrences(of: "file://", with: "")
+      : outputPath
 
-    // Stwórz composition
+    print("🎬 Starting video merge...")
+    print("📹 Input videos: \(cleanedPaths.count)")
+    print("📁 Output: \(cleanedOutputPath)")
+
     let composition = AVMutableComposition()
 
     guard let videoTrack = composition.addMutableTrack(
@@ -45,25 +52,36 @@ class VideoMerger: NSObject {
     var insertTime = CMTime.zero
     var videoSize: CGSize?
     var frameRate: Float64?
+    var successfulSegments = 0
 
-    // Dodaj każdy segment do composition
-    for (index, videoPath) in videoPaths.enumerated() {
+    for (index, videoPath) in cleanedPaths.enumerated() {
+      print("📹 Processing segment \(index + 1)/\(cleanedPaths.count): \(videoPath)")
+      
       let url = URL(fileURLWithPath: videoPath)
+      print("🔗 URL created: \(url)")
 
       // Sprawdź czy plik istnieje
-      guard FileManager.default.fileExists(atPath: videoPath) else {
+      let exists = FileManager.default.fileExists(atPath: videoPath)
+      print("📂 File exists: \(exists)")
+      
+      guard exists else {
         print("⚠️ File not found: \(videoPath)")
         continue
       }
 
       let asset = AVAsset(url: url)
+      print("🎥 Asset created, loading tracks...")
+      
+      let videoTracks = asset.tracks(withMediaType: .video)
+      print("📊 Video tracks found: \(videoTracks.count)")
 
-      guard let videoAssetTrack = asset.tracks(withMediaType: .video).first else {
+      guard let videoAssetTrack = videoTracks.first else {
         print("⚠️ No video track in: \(videoPath)")
         continue
       }
 
-      // Zachowaj rozmiar i frame rate z pierwszego wideo
+      print("✅ Video track found!")
+
       if videoSize == nil {
         videoSize = videoAssetTrack.naturalSize
         frameRate = Float64(videoAssetTrack.nominalFrameRate)
@@ -72,25 +90,28 @@ class VideoMerger: NSObject {
       }
 
       do {
-        // Dodaj video track
         let timeRange = CMTimeRange(start: .zero, duration: asset.duration)
+        print("⏱️ Duration: \(CMTimeGetSeconds(asset.duration))s")
+        
         try videoTrack.insertTimeRange(
           timeRange,
           of: videoAssetTrack,
           at: insertTime
         )
 
-        // Dodaj audio track (jeśli istnieje)
         if let audioAssetTrack = asset.tracks(withMediaType: .audio).first {
           try audioTrack.insertTimeRange(
             timeRange,
             of: audioAssetTrack,
             at: insertTime
           )
+          print("🔊 Audio track added")
+        } else {
+          print("🔇 No audio track")
         }
 
-        print("✅ Added segment \(index + 1)/\(videoPaths.count)")
-
+        successfulSegments += 1
+        print("✅ Added segment \(index + 1)/\(cleanedPaths.count)")
         insertTime = CMTimeAdd(insertTime, asset.duration)
 
       } catch {
@@ -100,20 +121,23 @@ class VideoMerger: NSObject {
       }
     }
 
-    // Sprawdź czy mamy jakiekolwiek wideo
+    print("📊 Successfully processed: \(successfulSegments)/\(cleanedPaths.count) segments")
+    print("⏱️ Total duration: \(CMTimeGetSeconds(insertTime))s")
+
     guard insertTime > .zero else {
+      print("❌ No valid segments - insertTime is zero")
       rejecter("NO_VIDEO", "No valid video segments found", nil)
       return
     }
 
-    print("⏱️ Total duration: \(CMTimeGetSeconds(insertTime))s")
-
-    let outputURL = URL(fileURLWithPath: outputPath)
-
+    let outputURL = URL(fileURLWithPath: cleanedOutputPath)
+    
     // Usuń istniejący plik
-    try? FileManager.default.removeItem(at: outputURL)
+    if FileManager.default.fileExists(atPath: cleanedOutputPath) {
+      print("🗑️ Removing existing file")
+      try? FileManager.default.removeItem(at: outputURL)
+    }
 
-    // Stwórz exporter
     guard let exporter = AVAssetExportSession(
       asset: composition,
       presetName: AVAssetExportPresetHighestQuality
@@ -126,7 +150,6 @@ class VideoMerger: NSObject {
     exporter.outputFileType = .mp4
     exporter.shouldOptimizeForNetworkUse = true
 
-    // Ustaw video composition dla poprawnego rozmiaru
     if let size = videoSize, let fps = frameRate {
       let videoComposition = AVMutableVideoComposition()
       videoComposition.renderSize = size
@@ -142,27 +165,28 @@ class VideoMerger: NSObject {
       exporter.videoComposition = videoComposition
     }
 
-    print("🔄 Exporting video...")
+    print("🔄 Starting export...")
 
-    // Eksportuj wideo
     exporter.exportAsynchronously {
       DispatchQueue.main.async {
         switch exporter.status {
         case .completed:
           print("✅ Video merge completed!")
-          print("📁 Output: \(outputPath)")
+          print("📁 Output: \(cleanedOutputPath)")
 
-          // Sprawdź rozmiar pliku
-          if let attributes = try? FileManager.default.attributesOfItem(atPath: outputPath),
+          if let attributes = try? FileManager.default.attributesOfItem(atPath: cleanedOutputPath),
              let fileSize = attributes[.size] as? Int64 {
             print("📦 File size: \(fileSize / 1024 / 1024)MB")
           }
 
-          resolver(outputPath)
+          resolver(cleanedOutputPath)
 
         case .failed:
           let errorMsg = exporter.error?.localizedDescription ?? "Unknown error"
           print("❌ Export failed: \(errorMsg)")
+          if let error = exporter.error {
+            print("❌ Error details: \(error)")
+          }
           rejecter("EXPORT_FAILED", "Video export failed: \(errorMsg)", exporter.error)
 
         case .cancelled:
@@ -170,16 +194,13 @@ class VideoMerger: NSObject {
           rejecter("CANCELLED", "Video export was cancelled", nil)
 
         default:
-          print("❌ Unknown export status")
+          print("❌ Unknown export status: \(exporter.status.rawValue)")
           rejecter("UNKNOWN_ERROR", "Unknown export error", nil)
         }
       }
     }
   }
 
-  /**
-   * Wymaga uruchomienia na main queue
-   */
   @objc
   static func requiresMainQueueSetup() -> Bool {
     return false
