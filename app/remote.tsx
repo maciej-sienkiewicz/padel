@@ -11,11 +11,13 @@ import {
     Alert,
     ActivityIndicator,
     TextInput,
+    ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 
 import Colors from '@/constants/colors';
+import RecordingConfig from '@/constants/recording';
 import { useRecording } from '@/contexts/RecordingContext';
 
 export default function RemoteScreen() {
@@ -62,7 +64,7 @@ export default function RemoteScreen() {
         }
     };
 
-    const handleCapture = async (minutes: number) => {
+    const handleCapture = async (seconds: number, label: string) => {
         if (!isConnected) {
             Alert.alert('Błąd', 'Nie połączono z kamerą');
             return;
@@ -75,7 +77,6 @@ export default function RemoteScreen() {
         setSending(true);
 
         try {
-            const seconds = minutes * 60;
             sendCaptureSignal(seconds);
 
             if (Platform.OS !== 'web') {
@@ -84,7 +85,7 @@ export default function RemoteScreen() {
 
             Alert.alert(
                 '✅ Wysłano!',
-                `Sygnał ${minutes} min wysłany do kamery`,
+                `Sygnał "${label}" wysłany do kamery`,
                 [{ text: 'OK' }]
             );
         } catch (error) {
@@ -120,7 +121,11 @@ export default function RemoteScreen() {
                     <View style={styles.placeholder} />
                 </View>
 
-                <View style={styles.content}>
+                <ScrollView
+                    style={styles.scrollView}
+                    contentContainerStyle={styles.content}
+                    showsVerticalScrollIndicator={false}
+                >
                     <View style={styles.statusCard}>
                         <View style={styles.statusRow}>
                             <Wifi size={20} color={isConnected ? '#10B981' : Colors.textMuted} />
@@ -205,55 +210,36 @@ export default function RemoteScreen() {
                         <View style={styles.controlsSection}>
                             <Text style={styles.controlsTitle}>Zapisz najlepsze akcje</Text>
 
-                            <TouchableOpacity
-                                style={styles.captureButton}
-                                onPress={() => handleCapture(2)}
-                                disabled={sending}
-                            >
-                                <LinearGradient
-                                    colors={['#3B82F6', '#2563EB']}
-                                    start={{ x: 0, y: 0 }}
-                                    end={{ x: 1, y: 1 }}
-                                    style={styles.captureButtonGradient}
+                            {/* Dynamicznie generowane przyciski z konfiguracji */}
+                            {RecordingConfig.CAPTURE_DURATIONS.map((duration, index) => (
+                                <TouchableOpacity
+                                    key={index}
+                                    style={styles.captureButton}
+                                    onPress={() => handleCapture(duration.seconds, duration.label)}
+                                    disabled={sending}
                                 >
-                                    {sending ? (
-                                        <ActivityIndicator color={Colors.text} size="large" />
-                                    ) : (
-                                        <>
-                                            <Clock size={32} color={Colors.text} />
-                                            <Text style={styles.captureButtonText}>2 minuty</Text>
-                                            <Text style={styles.captureButtonSubtext}>
-                                                Zapisz ostatnie 2 minuty
-                                            </Text>
-                                        </>
-                                    )}
-                                </LinearGradient>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity
-                                style={styles.captureButton}
-                                onPress={() => handleCapture(5)}
-                                disabled={sending}
-                            >
-                                <LinearGradient
-                                    colors={['#10B981', '#059669']}
-                                    start={{ x: 0, y: 0 }}
-                                    end={{ x: 1, y: 1 }}
-                                    style={styles.captureButtonGradient}
-                                >
-                                    {sending ? (
-                                        <ActivityIndicator color={Colors.text} size="large" />
-                                    ) : (
-                                        <>
-                                            <Clock size={32} color={Colors.text} />
-                                            <Text style={styles.captureButtonText}>5 minut</Text>
-                                            <Text style={styles.captureButtonSubtext}>
-                                                Zapisz ostatnie 5 minut
-                                            </Text>
-                                        </>
-                                    )}
-                                </LinearGradient>
-                            </TouchableOpacity>
+                                    <LinearGradient
+                                        colors={duration.color}
+                                        start={{ x: 0, y: 0 }}
+                                        end={{ x: 1, y: 1 }}
+                                        style={styles.captureButtonGradient}
+                                    >
+                                        {sending ? (
+                                            <ActivityIndicator color={Colors.text} size="large" />
+                                        ) : (
+                                            <>
+                                                <Clock size={32} color={Colors.text} />
+                                                <Text style={styles.captureButtonText}>
+                                                    {duration.label}
+                                                </Text>
+                                                <Text style={styles.captureButtonSubtext}>
+                                                    Zapisz ostatnie {duration.label}
+                                                </Text>
+                                            </>
+                                        )}
+                                    </LinearGradient>
+                                </TouchableOpacity>
+                            ))}
 
                             <TouchableOpacity
                                 style={styles.disconnectButton}
@@ -263,7 +249,7 @@ export default function RemoteScreen() {
                             </TouchableOpacity>
                         </View>
                     )}
-                </View>
+                </ScrollView>
             </SafeAreaView>
         </View>
     );
@@ -303,9 +289,12 @@ const styles = StyleSheet.create({
     placeholder: {
         width: 48,
     },
-    content: {
+    scrollView: {
         flex: 1,
+    },
+    content: {
         padding: 20,
+        paddingBottom: 40,
     },
     statusCard: {
         backgroundColor: 'rgba(255, 255, 255, 0.05)',
@@ -410,8 +399,7 @@ const styles = StyleSheet.create({
         lineHeight: 18,
     },
     controlsSection: {
-        flex: 1,
-        justifyContent: 'center',
+        paddingTop: 20,
     },
     controlsTitle: {
         fontSize: 20,

@@ -1,6 +1,6 @@
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
-import { ArrowLeft, Circle, Wifi, Save } from 'lucide-react-native';
+import { ArrowLeft, Circle, Wifi, Save, Loader } from 'lucide-react-native';
 import React, { useRef, useEffect, useState } from 'react';
 import {
     View,
@@ -28,12 +28,14 @@ export default function CameraScreen() {
         stopRecording,
         serverAddress,
         highlights,
+        processingState,
         setCameraReference,
-        startAsCamera,     // ← Upewnij się że to jest!
-        disconnect,        // ← Upewnij się że to jest!
+        startAsCamera,
+        disconnect,
     } = useRecording();
 
     const pulseAnim = useRef(new Animated.Value(1)).current;
+    const spinAnim = useRef(new Animated.Value(0)).current;
     const cameraRef = useRef<any>(null);
     const [isCameraReady, setIsCameraReady] = useState(false);
 
@@ -64,7 +66,26 @@ export default function CameraScreen() {
         }
     }, [isRecording, pulseAnim]);
 
-    // ← TUTAJ DODAJ TEN NOWY useEffect!
+    // Animacja loadera podczas przetwarzania
+    useEffect(() => {
+        if (processingState.isProcessing) {
+            Animated.loop(
+                Animated.timing(spinAnim, {
+                    toValue: 1,
+                    duration: 2000,
+                    useNativeDriver: true,
+                })
+            ).start();
+        } else {
+            spinAnim.setValue(0);
+        }
+    }, [processingState.isProcessing, spinAnim]);
+
+    const spin = spinAnim.interpolate({
+        inputRange: [0, 1],
+        outputRange: ['0deg', '360deg'],
+    });
+
     useEffect(() => {
         console.log('📹 Camera screen mounted, starting camera mode...');
 
@@ -200,7 +221,7 @@ export default function CameraScreen() {
         <View style={styles.container}>
             <CameraView
                 style={styles.camera}
-                mode="video"  // ← KLUCZOWE! Bez tego recordAsync() nie działa!
+                mode="video"
                 facing={'back'}
                 ref={cameraRef}
                 onCameraReady={() => {
@@ -256,7 +277,23 @@ export default function CameraScreen() {
                     </View>
 
                     <View style={styles.centerContent}>
-                        {isRecording && (
+                        {/* Wskaźnik przetwarzania wideo */}
+                        {processingState.isProcessing && (
+                            <View style={styles.processingContainer}>
+                                <Animated.View style={{ transform: [{ rotate: spin }] }}>
+                                    <Loader size={32} color={Colors.primary} />
+                                </Animated.View>
+                                <Text style={styles.processingTitle}>Przetwarzanie...</Text>
+                                <Text style={styles.processingText}>
+                                    {processingState.progress}
+                                </Text>
+                                <Text style={styles.processingSubtext}>
+                                    Możesz kontynuować nagrywanie
+                                </Text>
+                            </View>
+                        )}
+
+                        {isRecording && !processingState.isProcessing && (
                             <Animated.View
                                 style={[
                                     styles.recordingIndicator,
@@ -268,7 +305,7 @@ export default function CameraScreen() {
                             </Animated.View>
                         )}
 
-                        {!isRecording && (
+                        {!isRecording && !processingState.isProcessing && (
                             <View style={styles.warningContainer}>
                                 <Text style={styles.warningText}>
                                     {isConnected ? 'Gotowy do nagrywania' : 'Oczekiwanie na pilota'}
@@ -401,6 +438,34 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: 20,
+    },
+    processingContainer: {
+        backgroundColor: 'rgba(0, 217, 255, 0.2)',
+        borderRadius: 20,
+        padding: 24,
+        borderWidth: 2,
+        borderColor: Colors.primary,
+        alignItems: 'center',
+        minWidth: '80%',
+        gap: 8,
+    },
+    processingTitle: {
+        color: Colors.text,
+        fontSize: 18,
+        fontWeight: '700',
+        marginTop: 8,
+    },
+    processingText: {
+        color: Colors.text,
+        fontSize: 14,
+        fontWeight: '600',
+        opacity: 0.9,
+    },
+    processingSubtext: {
+        color: Colors.textMuted,
+        fontSize: 12,
+        fontStyle: 'italic',
+        marginTop: 4,
     },
     recordingIndicator: {
         flexDirection: 'row',
