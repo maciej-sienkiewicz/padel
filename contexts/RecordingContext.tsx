@@ -104,15 +104,15 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
     }, []);
 
     /**
-     * 🎯 CAPTURE HIGHLIGHT - GOP-aligned precise extraction
+     * 🎯 CAPTURE HIGHLIGHT - POPRAWIONA LOGIKA
      *
-     * Dzięki GOP alignment możemy wyciąć DOKŁADNIE określony czas:
-     * - 40s = 40s (nie 20s, nie 60s!)
-     * - Ultra szybkie (0.5s vs 5s poprzednio)
-     * - Zero degradacji jakości
+     * KLUCZOWE ZMIANY:
+     * 1. Zatrzymuje aktualny segment przed wycinaniem (aby mieć pełne requestedDuration)
+     * 2. Prawidłowo oblicza które segmenty potrzebujemy
+     * 3. Automatycznie wznawia nagrywanie po wycinaniu
      */
     const captureHighlight = useCallback(async (requestedDuration: number = 120) => {
-        console.log('🎬 Capture highlight requested:', requestedDuration);
+        console.log('🎬 Capture highlight requested:', requestedDuration, 'seconds');
 
         if (!isRecordingRef.current) {
             Alert.alert('Błąd', 'Nagrywanie nie jest aktywne');
@@ -124,29 +124,48 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             return;
         }
 
+        // 🔥 KRYTYCZNE: Zatrzymaj aktualny segment aby go sfinalizować
+        console.log('⏸️ Pausing recording to finalize current segment...');
+        const wasRecording = isRecordingRef.current;
+
+        try {
+            if (cameraRef.current) {
+                await cameraRef.current.stopRecording();
+            }
+        } catch (error) {
+            console.warn('⚠️ Stop recording warning:', error);
+        }
+
+        // Poczekaj chwilę aż segment zostanie dodany do bufora
+        await new Promise(resolve => setTimeout(resolve, 500));
+
         const now = Date.now();
         const requestedStartTime = now - (requestedDuration * 1000);
 
-        // Znajdź wszystkie segmenty które zawierają nasz zakres czasowy
+        console.log('⏱️ Time range:');
+        console.log(`   Now: ${new Date(now).toISOString()}`);
+        console.log(`   Requested start: ${new Date(requestedStartTime).toISOString()}`);
+        console.log(`   Duration: ${requestedDuration}s`);
+
+        // Znajdź wszystkie segmenty które pokrywają się z naszym zakresem czasowym
         const relevantSegments = videoSegments.current
             .filter(seg => {
                 const segmentEnd = seg.recordedAt + seg.duration;
-                // Segment overlaps with our requested range if:
-                // segment end > requested start AND segment start < now
+                // Segment overlaps if: segment_end > requested_start AND segment_start < now
                 return segmentEnd > requestedStartTime && seg.recordedAt < now;
             })
             .sort((a, b) => a.recordedAt - b.recordedAt);
 
         if (relevantSegments.length === 0) {
-            Alert.alert('Błąd', 'Brak nagrań z tego okresu. Poczekaj chwilę.');
+            Alert.alert('Błąd', 'Brak nagrań z tego okresu. Poczekaj chwilę i spróbuj ponownie.');
             return;
         }
 
-        console.log(`📊 Found ${relevantSegments.length} relevant segments`);
+        console.log(`📊 Found ${relevantSegments.length} relevant segments:`);
         relevantSegments.forEach((seg, i) => {
             const start = new Date(seg.recordedAt).toISOString();
             const end = new Date(seg.recordedAt + seg.duration).toISOString();
-            console.log(`  Segment ${i + 1}: ${start} → ${end} (${(seg.duration / 1000).toFixed(1)}s)`);
+            console.log(`  ${i + 1}. ${start} → ${end} (${(seg.duration / 1000).toFixed(1)}s)`);
         });
 
         const highlightId = `highlight_${Date.now()}`;
@@ -158,7 +177,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                 progress: 'Przygotowywanie...',
             });
 
-            showToast(`🎬 Rozpoczynam przetwarzanie ${requestedDuration}s nagrania...`);
+            showToast(`🎬 Przetwarzam ${requestedDuration}s nagrania...`);
 
             if (!mediaPermission?.granted) {
                 const { granted } = await requestMediaPermission();
@@ -174,32 +193,28 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
 
             const outputUri = `${highlightDir}${highlightId}.mp4`;
 
-            // 🔥 KLUCZOWE: Oblicz precyzyjny offset w PIERWSZYM segmencie
-            const firstSegment = relevantSegments[0];
-            const offsetInFirstSegment = Math.max(0, (requestedStartTime - firstSegment.recordedAt) / 1000);
-
-            console.log('🎯 Extraction parameters:');
-            console.log(`   First segment starts at: ${new Date(firstSegment.recordedAt).toISOString()}`);
-            console.log(`   Requested start: ${new Date(requestedStartTime).toISOString()}`);
-            console.log(`   Offset in first segment: ${offsetInFirstSegment.toFixed(2)}s`);
-            console.log(`   Requested duration: ${requestedDuration}s`);
+            // 🔥 POPRAWIONA LOGIKA: Użyj NOWEJ funkcji mergePreciseClip
+            // która używa re-encoding dla idealnego połączenia bez szarpań
 
             setProcessingState({
                 isProcessing: true,
                 highlightId,
-                progress: `Wycinanie ${requestedDuration}s z ${relevantSegments.length} segmentów...`,
+                progress: `Łączę ${relevantSegments.length} segmentów...`,
             });
 
+            console.log('🔄 Starting merge with re-encoding for seamless result...');
+
             try {
-                // ✨ UŻYJ NOWEJ FUNKCJI extractPreciseClip!
-                const mergedPath = await VideoMerger.extractPreciseClip(
+                // Użyj NOWEJ funkcji mergePreciseClip zamiast extractPreciseClip
+                const mergedPath = await VideoMerger.mergePreciseClip(
                     relevantSegments.map(seg => seg.uri),
-                    offsetInFirstSegment,      // Offset w pierwszym segmencie
-                    requestedDuration,          // Dokładna długość
+                    requestedStartTime,    // Globalny timestamp początku
+                    requestedDuration,      // Dokładna długość w sekundach
+                    relevantSegments.map(seg => seg.recordedAt), // Timestampy początku każdego segmentu
                     outputUri
                 );
 
-                console.log('✅ Precise clip extracted!', mergedPath);
+                console.log('✅ Merge completed!', mergedPath);
 
                 setProcessingState({
                     isProcessing: true,
@@ -209,7 +224,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
 
                 const fileInfo = await FileSystem.getInfoAsync(mergedPath);
                 if (!fileInfo.exists) {
-                    throw new Error('Extracted file not created');
+                    throw new Error('Merged file not created');
                 }
 
                 console.log(`📦 Output file size: ${(fileInfo.size / 1024 / 1024).toFixed(2)}MB`);
@@ -244,15 +259,64 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
 
                 Alert.alert(
                     '✅ Gotowe!',
-                    `Precyzyjne nagranie ${requestedDuration}s zapisane\n` +
-                    `(${relevantSegments.length} segmentów użytych)`,
+                    `Nagranie ${requestedDuration}s zapisane bez szarpań\n` +
+                    `(${relevantSegments.length} segmentów połączonych)`,
                     [{ text: 'OK' }]
                 );
 
-                console.log('🎉 Highlight captured with GOP alignment!');
+                console.log('🎉 Highlight captured successfully!');
+
+                // 🔥 KRYTYCZNE: Wznów nagrywanie jeśli było aktywne
+                if (wasRecording) {
+                    console.log('▶️ Resuming recording...');
+                    await new Promise(resolve => setTimeout(resolve, 200));
+
+                    // Restart recording loop
+                    const recordSegment = async (): Promise<void> => {
+                        if (!isRecordingRef.current || !cameraRef.current) {
+                            return;
+                        }
+
+                        try {
+                            const segmentStartTime = Date.now();
+                            const video = await cameraRef.current.recordAsync({
+                                maxDuration: RecordingConfig.SEGMENT_DURATION,
+                            });
+
+                            if (video && video.uri && isRecordingRef.current) {
+                                const segmentEndTime = Date.now();
+                                const actualDuration = segmentEndTime - segmentStartTime;
+
+                                const segment: VideoSegment = {
+                                    uri: video.uri,
+                                    timestamp: segmentEndTime,
+                                    recordedAt: segmentStartTime,
+                                    duration: actualDuration,
+                                };
+
+                                videoSegments.current.push(segment);
+
+                                // Usuń stare segmenty
+                                const cutoffTime = Date.now() - (RecordingConfig.BUFFER_DURATION + 10) * 1000;
+                                videoSegments.current = videoSegments.current.filter(
+                                    seg => seg.recordedAt > cutoffTime
+                                );
+
+                                console.log(`📦 Buffer: ${videoSegments.current.length} segments`);
+
+                                await new Promise(resolve => setTimeout(resolve, 100));
+                                await recordSegment();
+                            }
+                        } catch (error) {
+                            console.error('Recording error after resume:', error);
+                        }
+                    };
+
+                    recordSegment();
+                }
 
             } catch (mergeError) {
-                console.error('❌ Video extraction failed:', mergeError);
+                console.error('❌ Video merge failed:', mergeError);
                 setProcessingState({
                     isProcessing: false,
                     highlightId: null,
@@ -260,9 +324,41 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                 });
 
                 Alert.alert(
-                    'Błąd wycinania wideo',
-                    'Nie udało się wyciąć fragmentu. Sprawdź logi.'
+                    'Błąd łączenia wideo',
+                    'Nie udało się połączyć segmentów. Sprawdź logi.'
                 );
+
+                // 🔥 Wznów nagrywanie nawet w przypadku błędu
+                if (wasRecording && isRecordingRef.current) {
+                    console.log('▶️ Resuming recording after error...');
+                    // Użyj tej samej logiki co wyżej
+                    const recordSegment = async (): Promise<void> => {
+                        if (!isRecordingRef.current || !cameraRef.current) return;
+                        try {
+                            const segmentStartTime = Date.now();
+                            const video = await cameraRef.current.recordAsync({
+                                maxDuration: RecordingConfig.SEGMENT_DURATION,
+                            });
+                            if (video && video.uri && isRecordingRef.current) {
+                                const segmentEndTime = Date.now();
+                                const segment: VideoSegment = {
+                                    uri: video.uri,
+                                    timestamp: segmentEndTime,
+                                    recordedAt: segmentStartTime,
+                                    duration: segmentEndTime - segmentStartTime,
+                                };
+                                videoSegments.current.push(segment);
+                                const cutoffTime = Date.now() - (RecordingConfig.BUFFER_DURATION + 10) * 1000;
+                                videoSegments.current = videoSegments.current.filter(seg => seg.recordedAt > cutoffTime);
+                                await new Promise(resolve => setTimeout(resolve, 100));
+                                await recordSegment();
+                            }
+                        } catch (error) {
+                            console.error('Recording error after resume:', error);
+                        }
+                    };
+                    recordSegment();
+                }
             }
 
         } catch (error) {
@@ -273,6 +369,37 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                 progress: '',
             });
             Alert.alert('Błąd', `Nie udało się zapisać akcji: ${error}`);
+
+            // 🔥 Wznów nagrywanie nawet w przypadku błędu
+            if (wasRecording && isRecordingRef.current) {
+                console.log('▶️ Resuming recording after error...');
+                const recordSegment = async (): Promise<void> => {
+                    if (!isRecordingRef.current || !cameraRef.current) return;
+                    try {
+                        const segmentStartTime = Date.now();
+                        const video = await cameraRef.current.recordAsync({
+                            maxDuration: RecordingConfig.SEGMENT_DURATION,
+                        });
+                        if (video && video.uri && isRecordingRef.current) {
+                            const segmentEndTime = Date.now();
+                            const segment: VideoSegment = {
+                                uri: video.uri,
+                                timestamp: segmentEndTime,
+                                recordedAt: segmentStartTime,
+                                duration: segmentEndTime - segmentStartTime,
+                            };
+                            videoSegments.current.push(segment);
+                            const cutoffTime = Date.now() - (RecordingConfig.BUFFER_DURATION + 10) * 1000;
+                            videoSegments.current = videoSegments.current.filter(seg => seg.recordedAt > cutoffTime);
+                            await new Promise(resolve => setTimeout(resolve, 100));
+                            await recordSegment();
+                        }
+                    } catch (error) {
+                        console.error('Recording error after resume:', error);
+                    }
+                };
+                recordSegment();
+            }
         }
     }, [mediaPermission, requestMediaPermission, processingState, showToast]);
 
@@ -394,8 +521,8 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             videoSegments.current = [];
             recordingStartTime.current = Date.now();
 
-            console.log('🎥 Starting GOP-aligned continuous recording...');
-            console.log(`📊 Config: ${RecordingConfig.SEGMENT_DURATION}s segments, ${RecordingConfig.GOP_DURATION_SECONDS}s GOP`);
+            console.log('🎥 Starting continuous recording...');
+            console.log(`📊 Segment duration: ${RecordingConfig.SEGMENT_DURATION}s`);
 
             await new Promise(resolve => setTimeout(resolve, 500));
 
@@ -411,7 +538,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
 
                 while (retryCount < maxRetries && isRecordingRef.current) {
                     try {
-                        console.log(`📹 Recording ${RecordingConfig.SEGMENT_DURATION}s GOP-aligned segment...`);
+                        console.log(`📹 Recording ${RecordingConfig.SEGMENT_DURATION}s segment...`);
 
                         const video = await cameraRef.current.recordAsync({
                             maxDuration: RecordingConfig.SEGMENT_DURATION,
@@ -421,7 +548,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                             const segmentEndTime = Date.now();
                             const actualDuration = segmentEndTime - segmentStartTime;
 
-                            console.log(`✅ Segment recorded: ${actualDuration}ms`);
+                            console.log(`✅ Segment recorded: ${(actualDuration / 1000).toFixed(1)}s`);
 
                             const segment: VideoSegment = {
                                 uri: video.uri,
@@ -452,7 +579,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                             );
 
                             const bufferSeconds = (Date.now() - recordingStartTime.current) / 1000;
-                            console.log(`📦 Buffer: ${videoSegments.current.length} segments (${bufferSeconds.toFixed(1)}s total)`);
+                            console.log(`📦 Buffer: ${videoSegments.current.length} segments (${bufferSeconds.toFixed(1)}s recorded)`);
 
                             await new Promise(resolve => setTimeout(resolve, 100));
 
