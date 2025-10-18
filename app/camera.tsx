@@ -1,4 +1,3 @@
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { ArrowLeft, Circle, Wifi, Save, Loader } from 'lucide-react-native';
 import React, { useRef, useEffect, useState } from 'react';
@@ -14,13 +13,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
+import { Camera } from 'react-native-vision-camera';
 
 import Colors from '@/constants/colors';
 import { useRecording } from '@/contexts/RecordingContext';
 
 export default function CameraScreen() {
     const router = useRouter();
-    const [permission, requestPermission] = useCameraPermissions();
     const {
         isRecording,
         isConnected,
@@ -29,6 +28,7 @@ export default function CameraScreen() {
         serverAddress,
         highlights,
         processingState,
+        device,
         setCameraReference,
         startAsCamera,
         disconnect,
@@ -36,14 +36,14 @@ export default function CameraScreen() {
 
     const pulseAnim = useRef(new Animated.Value(1)).current;
     const spinAnim = useRef(new Animated.Value(0)).current;
-    const cameraRef = useRef<any>(null);
+    const cameraRef = useRef<Camera>(null);
     const [isCameraReady, setIsCameraReady] = useState(false);
 
     useEffect(() => {
         if (cameraRef.current) {
             setCameraReference(cameraRef.current);
         }
-    }, [cameraRef.current, setCameraReference]);
+    }, [setCameraReference]);
 
     useEffect(() => {
         if (isRecording) {
@@ -66,7 +66,6 @@ export default function CameraScreen() {
         }
     }, [isRecording, pulseAnim]);
 
-    // Animacja loadera podczas przetwarzania
     useEffect(() => {
         if (processingState.isProcessing) {
             Animated.loop(
@@ -95,7 +94,7 @@ export default function CameraScreen() {
                 console.log('✅ Camera mode started');
             } catch (error) {
                 console.error('❌ Failed to start camera:', error);
-                Alert.alert('Błąd', 'Nie udało się uruchomić trybu kamery. Sprawdź internet.');
+                Alert.alert('Błąd', 'Nie udało się uruchomić trybu kamery.');
             }
         };
 
@@ -105,7 +104,7 @@ export default function CameraScreen() {
             console.log('👋 Camera screen unmounting');
             disconnect();
         };
-    }, []);
+    }, [startAsCamera, disconnect]);
 
     const handleBack = () => {
         if (isRecording) {
@@ -134,26 +133,6 @@ export default function CameraScreen() {
     };
 
     const handleStartRecording = () => {
-        if (!isConnected) {
-            Alert.alert(
-                'Brak pilota',
-                'Możesz rozpocząć nagrywanie bez pilota i połączyć go później',
-                [
-                    { text: 'Poczekaj', style: 'cancel' },
-                    {
-                        text: 'Rozpocznij mimo to',
-                        onPress: () => {
-                            if (Platform.OS !== 'web') {
-                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-                            }
-                            startRecording();
-                        }
-                    }
-                ]
-            );
-            return;
-        }
-
         if (Platform.OS !== 'web') {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
         }
@@ -174,18 +153,8 @@ export default function CameraScreen() {
         router.push('/highlights');
     };
 
-    if (!permission) {
-        return (
-            <View style={styles.container}>
-                <LinearGradient
-                    colors={[Colors.background, Colors.backgroundLight]}
-                    style={StyleSheet.absoluteFillObject}
-                />
-            </View>
-        );
-    }
-
-    if (!permission.granted) {
+    // Check if camera is available
+    if (!device) {
         return (
             <View style={styles.container}>
                 <LinearGradient
@@ -194,23 +163,10 @@ export default function CameraScreen() {
                 />
                 <SafeAreaView style={styles.safeArea}>
                     <View style={styles.permissionContainer}>
-                        <Text style={styles.permissionTitle}>Dostęp do kamery</Text>
+                        <Text style={styles.permissionTitle}>Kamera niedostępna</Text>
                         <Text style={styles.permissionText}>
-                            Potrzebujemy dostępu do kamery, aby nagrywać akcje
+                            Nie znaleziono urządzenia kamery
                         </Text>
-                        <TouchableOpacity
-                            style={styles.permissionButton}
-                            onPress={requestPermission}
-                        >
-                            <LinearGradient
-                                colors={[Colors.primary, Colors.primaryDark]}
-                                start={{ x: 0, y: 0 }}
-                                end={{ x: 1, y: 1 }}
-                                style={styles.permissionButtonGradient}
-                            >
-                                <Text style={styles.permissionButtonText}>Zezwól</Text>
-                            </LinearGradient>
-                        </TouchableOpacity>
                     </View>
                 </SafeAreaView>
             </View>
@@ -219,25 +175,33 @@ export default function CameraScreen() {
 
     return (
         <View style={styles.container}>
-            <CameraView
-                style={styles.camera}
-                mode="video"
-                facing={'back'}
+            <Camera
                 ref={cameraRef}
-                onCameraReady={() => {
-                    console.log('📸 Camera onCameraReady callback FIRED!');
+                style={styles.camera}
+                device={device}
+                isActive={true}
+                video={true}
+                audio={true}
+                onInitialized={() => {
+                    console.log('📸 Camera initialized');
                     setIsCameraReady(true);
                 }}
-                onMountError={(error) => {
-                    console.error('❌ Camera mount error:', error);
-                    setIsCameraReady(false);
+                onError={(error) => {
+                    console.error('❌ Camera error:', error);
+                    Alert.alert('Błąd kamery', error.message);
                 }}
-            >
+            />
+
+            {/* UI OVERLAY - poza Camera component! */}
+            <View style={styles.overlay}>
                 <LinearGradient
-                    colors={['rgba(10, 14, 39, 0.8)', 'transparent', 'rgba(10, 14, 39, 0.9)']}
+                    colors={['rgba(10, 14, 39, 0.6)', 'transparent', 'rgba(10, 14, 39, 0.8)']}
                     style={StyleSheet.absoluteFillObject}
+                    pointerEvents="none"
                 />
+
                 <SafeAreaView style={styles.safeArea}>
+                    {/* Header */}
                     <View style={styles.header}>
                         <TouchableOpacity style={styles.backButton} onPress={handleBack}>
                             <View style={styles.iconButton}>
@@ -276,8 +240,8 @@ export default function CameraScreen() {
                         </TouchableOpacity>
                     </View>
 
+                    {/* Center Content */}
                     <View style={styles.centerContent}>
-                        {/* Wskaźnik przetwarzania wideo */}
                         {processingState.isProcessing && (
                             <View style={styles.processingContainer}>
                                 <Animated.View style={{ transform: [{ rotate: spin }] }}>
@@ -310,7 +274,7 @@ export default function CameraScreen() {
                                 <Text style={styles.warningText}>
                                     {isConnected ? 'Gotowy do nagrywania' : 'Oczekiwanie na pilota'}
                                 </Text>
-                                {serverAddress && (
+                                {serverAddress ? (
                                     <>
                                         <Text style={styles.sessionLabel}>Kod sesji:</Text>
                                         <View style={styles.sessionCodeContainer}>
@@ -320,30 +284,33 @@ export default function CameraScreen() {
                                             Wpisz ten kod w aplikacji na pilocie
                                         </Text>
                                     </>
-                                )}
-                                {!serverAddress && (
+                                ) : (
                                     <Text style={styles.warningSubtext}>
-                                        Ładowanie...
+                                        Generowanie kodu sesji...
                                     </Text>
                                 )}
                             </View>
                         )}
                     </View>
 
+                    {/* Footer */}
                     <View style={styles.footer}>
                         {!isRecording ? (
                             <TouchableOpacity
                                 style={styles.recordButton}
                                 onPress={handleStartRecording}
+                                disabled={!isCameraReady}
                             >
                                 <LinearGradient
-                                    colors={[Colors.primary, Colors.primaryDark]}
+                                    colors={isCameraReady ? [Colors.primary, Colors.primaryDark] : ['#666', '#444']}
                                     start={{ x: 0, y: 0 }}
                                     end={{ x: 1, y: 1 }}
                                     style={styles.recordButtonGradient}
                                 >
                                     <Circle size={32} color={Colors.text} strokeWidth={3} />
-                                    <Text style={styles.recordButtonText}>Rozpocznij nagrywanie</Text>
+                                    <Text style={styles.recordButtonText}>
+                                        {isCameraReady ? 'Rozpocznij nagrywanie' : 'Przygotowanie...'}
+                                    </Text>
                                 </LinearGradient>
                             </TouchableOpacity>
                         ) : (
@@ -359,7 +326,7 @@ export default function CameraScreen() {
                         )}
                     </View>
                 </SafeAreaView>
-            </CameraView>
+            </View>
         </View>
     );
 }
@@ -370,10 +337,15 @@ const styles = StyleSheet.create({
         backgroundColor: Colors.background,
     },
     camera: {
-        flex: 1,
+        ...StyleSheet.absoluteFillObject, // Kamera wypełnia cały ekran
+    },
+    overlay: {
+        ...StyleSheet.absoluteFillObject, // Overlay na górze kamery
+        zIndex: 1,
     },
     safeArea: {
         flex: 1,
+        justifyContent: 'space-between', // WAŻNE: rozdziela header, center, footer
     },
     header: {
         flexDirection: 'row',
@@ -602,19 +574,5 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         marginBottom: 32,
         lineHeight: 24,
-    },
-    permissionButton: {
-        width: '100%',
-        borderRadius: 24,
-        overflow: 'hidden',
-    },
-    permissionButtonGradient: {
-        paddingVertical: 18,
-        alignItems: 'center',
-    },
-    permissionButtonText: {
-        color: Colors.text,
-        fontSize: 18,
-        fontWeight: '700',
     },
 });
