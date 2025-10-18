@@ -23,7 +23,7 @@ import RecordingConfig from '@/constants/recording';
  * Pamięć: max ~500MB (zamiast 3GB dla godzinnego meczu)
  */
 
-const SEGMENT_DURATION = 300; // 5 minut w sekundach
+const SEGMENT_DURATION = 10; // 5 minut w sekundach
 const BUFFER_DURATION = 900;  // 15 minut w sekundach (3 segmenty)
 
 interface VideoSegment {
