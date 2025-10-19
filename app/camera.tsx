@@ -1,3 +1,6 @@
+// app/camera.tsx
+// 🔧 FIX: Stabilny useEffect bez cyklicznych re-renderów
+
 import { useRouter } from 'expo-router';
 import { ArrowLeft, Circle, Wifi, Save, Loader } from 'lucide-react-native';
 import React, { useRef, useEffect, useState } from 'react';
@@ -38,6 +41,11 @@ export default function CameraScreen() {
     const spinAnim = useRef(new Animated.Value(0)).current;
     const cameraRef = useRef<Camera>(null);
     const [isCameraReady, setIsCameraReady] = useState(false);
+
+    // ✅ FIX: Track if component is mounted
+    const isMountedRef = useRef(true);
+    // ✅ FIX: Track if camera was initialized
+    const cameraInitializedRef = useRef(false);
 
     useEffect(() => {
         if (cameraRef.current) {
@@ -85,12 +93,22 @@ export default function CameraScreen() {
         outputRange: ['0deg', '360deg'],
     });
 
+    // ✅ FIX: Stabilny useEffect - uruchamia się tylko raz przy mount
     useEffect(() => {
         console.log('📹 Camera screen mounted, starting camera mode...');
 
+        isMountedRef.current = true;
+
         const initCamera = async () => {
+            // ✅ Zabezpieczenie przed podwójną inicjalizacją
+            if (cameraInitializedRef.current) {
+                console.log('⚠️ Camera already initialized, skipping');
+                return;
+            }
+
             try {
                 await startAsCamera();
+                cameraInitializedRef.current = true;
                 console.log('✅ Camera mode started');
             } catch (error) {
                 console.error('❌ Failed to start camera:', error);
@@ -100,11 +118,24 @@ export default function CameraScreen() {
 
         initCamera();
 
+        // ✅ FIX: Cleanup bez zagnieżdżonego return
         return () => {
             console.log('👋 Camera screen unmounting');
-            disconnect();
+            isMountedRef.current = false;
+            cameraInitializedRef.current = false;
+
+            // ✅ FIX: Disconnect tylko przy PRAWDZIWYM unmount
+            // Używamy setTimeout żeby upewnić się że to nie jest re-render
+            setTimeout(() => {
+                if (!isMountedRef.current) {
+                    console.log('🔌 Confirmed unmount, disconnecting...');
+                    disconnect();
+                } else {
+                    console.log('⚠️ False alarm - component still mounted');
+                }
+            }, 100);
         };
-    }, [startAsCamera, disconnect]);
+    }, []); // ✅ PUSTE ZALEŻNOŚCI - uruchamia się tylko przy mount/unmount!
 
     const handleBack = () => {
         if (isRecording) {
@@ -331,21 +362,22 @@ export default function CameraScreen() {
     );
 }
 
+// ... (styles bez zmian) ...
 const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: Colors.background,
     },
     camera: {
-        ...StyleSheet.absoluteFillObject, // Kamera wypełnia cały ekran
+        ...StyleSheet.absoluteFillObject,
     },
     overlay: {
-        ...StyleSheet.absoluteFillObject, // Overlay na górze kamery
+        ...StyleSheet.absoluteFillObject,
         zIndex: 1,
     },
     safeArea: {
         flex: 1,
-        justifyContent: 'space-between', // WAŻNE: rozdziela header, center, footer
+        justifyContent: 'space-between',
     },
     header: {
         flexDirection: 'row',

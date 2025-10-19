@@ -1,3 +1,6 @@
+// contexts/RecordingContext.tsx
+// 🎯 LAZY CAPTURE: Nie przerywaj segmentów, czekaj na naturalny koniec!
+
 import createContextHook from '@/utils/createContextHook';
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -11,25 +14,13 @@ import type { P2PMessage } from '@/services/FirebaseService';
 import VideoMerger from '@/modules/VideoMerger';
 import RecordingConfig from '@/constants/recording';
 
-/**
- * 🎯 ROLLING BUFFER ARCHITECTURE
- *
- * Zamiast jednego długiego nagrania, nagrywamy w segmentach:
- * - Segment duration: 5 minut (kompromis między gaps a zarządzaniem pamięcią)
- * - Buffer size: 15 minut (3 segmenty)
- * - Auto-cleanup: segmenty starsze niż 15 minut są usuwane
- *
- * Gap: ~30-50ms co 5 minut (prawie niezauważalne)
- * Pamięć: max ~500MB (zamiast 3GB dla godzinnego meczu)
- */
-
-const SEGMENT_DURATION = 10; // 5 minut w sekundach
-const BUFFER_DURATION = 900;  // 15 minut w sekundach (3 segmenty)
+const SEGMENT_DURATION = 120;
+const BUFFER_DURATION = 900;
 
 interface VideoSegment {
     uri: string;
-    startTime: number; // timestamp kiedy segment się rozpoczął
-    duration: number;   // faktyczna długość w ms
+    startTime: number;
+    duration: number;
 }
 
 interface Highlight {
@@ -45,6 +36,12 @@ interface ProcessingState {
     progress: string;
 }
 
+// 🆕 Pending Capture Request
+interface PendingCaptureRequest {
+    timestamp: number;        // Kiedy użytkownik nacisnął przycisk
+    requestedDuration: number; // Ile sekund chce
+}
+
 export const [RecordingProvider, useRecording] = createContextHook(() => {
     const [isRecording, setIsRecording] = useState<boolean>(false);
     const [highlights, setHighlights] = useState<Highlight[]>([]);
@@ -57,12 +54,10 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
         progress: '',
     });
 
-    // Permissions
     const { hasPermission: hasCameraPermission, requestPermission: requestCameraPermission } = useCameraPermission();
     const { hasPermission: hasMicrophonePermission, requestPermission: requestMicrophonePermission } = useMicrophonePermission();
     const [mediaPermission, requestMediaPermission] = MediaLibrary.usePermissions();
 
-    // Camera device
     const device = useCameraDevice('back');
 
     // Refs
@@ -72,6 +67,11 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
     const currentSegmentStartTime = useRef<number>(0);
     const messageUnsubscribe = useRef<(() => void) | null>(null);
     const connectionUnsubscribe = useRef<(() => void) | null>(null);
+    const segmentAutoStopTimeout = useRef<NodeJS.Timeout | null>(null);
+
+    // 🆕 LAZY CAPTURE: Queue for pending capture requests
+    const pendingCaptureQueue = useRef<PendingCaptureRequest[]>([]);
+    const isProcessingCapture = useRef<boolean>(false);
 
     const showToast = useCallback((message: string) => {
         if (Platform.OS === 'android') {
@@ -125,9 +125,6 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
         }
     }, []);
 
-    /**
-     * 🧹 Clean old segments from buffer
-     */
     const cleanOldSegments = useCallback(() => {
         const now = Date.now();
         const cutoffTime = now - (BUFFER_DURATION * 1000);
@@ -136,7 +133,6 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             seg => seg.startTime < cutoffTime
         );
 
-        // Delete old segment files
         oldSegments.forEach(async (seg) => {
             try {
                 await FileSystem.deleteAsync(seg.uri, { idempotent: true });
@@ -146,7 +142,6 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             }
         });
 
-        // Keep only recent segments
         videoSegments.current = videoSegments.current.filter(
             seg => seg.startTime >= cutoffTime
         );
@@ -155,22 +150,18 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
     }, []);
 
     /**
-     * 🎬 CAPTURE HIGHLIGHT - Extract from rolling buffer
+     * 🎬 PROCESS CAPTURE - Execute actual merging (called AFTER segment finishes)
      */
-    const captureHighlight = useCallback(async (requestedDuration: number = 120) => {
-        console.log('🎬 Capture highlight requested:', requestedDuration, 'seconds');
+    const processCaptureRequest = useCallback(async (captureTimestamp: number, requestedDuration: number) => {
+        console.log(`🎬 Processing capture request from ${new Date(captureTimestamp).toISOString()}`);
+        console.log(`   Requested duration: ${requestedDuration}s`);
 
         if (!isRecordingRef.current) {
-            Alert.alert('Błąd', 'Nagrywanie nie jest aktywne');
+            console.warn('⚠️ Recording stopped, skipping capture');
             return;
         }
 
-        if (processingState.isProcessing) {
-            showToast('⏳ Proszę czekać, przetwarzam poprzednie nagranie...');
-            return;
-        }
-
-        // Check if requested duration fits in buffer
+        // Check if we have enough buffer
         if (requestedDuration > BUFFER_DURATION) {
             Alert.alert(
                 'Za długi fragment',
@@ -179,26 +170,39 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             return;
         }
 
-        // Pause current segment to finalize it
-        if (!cameraRef.current) {
-            Alert.alert('Błąd', 'Kamera nie jest dostępna');
-            return;
-        }
-
         try {
-            console.log('⏸️ Pausing to finalize current segment...');
-            await cameraRef.current.pauseRecording();
+            setProcessingState({
+                isProcessing: true,
+                highlightId: `capture_${captureTimestamp}`,
+                progress: `Przygotowywanie...`,
+            });
 
-            // Wait for segment to finalize
-            await new Promise(resolve => setTimeout(resolve, 500));
+            // Calculate time window based on WHEN USER CLICKED (not now!)
+            const globalStartTime = captureTimestamp - (requestedDuration * 1000);
+            const globalEndTime = captureTimestamp;
 
-            const now = Date.now();
-            const globalStartTime = now - (requestedDuration * 1000);
+            console.log(`🕐 Capture window: ${new Date(globalStartTime).toISOString()} → ${new Date(globalEndTime).toISOString()}`);
+            console.log(`📦 Available segments: ${videoSegments.current.length}`);
+
+            // Log all segments for debugging
+            videoSegments.current.forEach((seg, i) => {
+                const segEnd = seg.startTime + seg.duration;
+                console.log(`   Segment ${i + 1}: ${new Date(seg.startTime).toISOString()} → ${new Date(segEnd).toISOString()} (${(seg.duration / 1000).toFixed(1)}s)`);
+            });
 
             // Find relevant segments
             const relevantSegments = videoSegments.current.filter(seg => {
                 const segmentEnd = seg.startTime + seg.duration;
-                return segmentEnd > globalStartTime && seg.startTime < now;
+                const overlaps = segmentEnd > globalStartTime && seg.startTime < globalEndTime;
+
+                if (overlaps) {
+                    const overlapStart = Math.max(seg.startTime, globalStartTime);
+                    const overlapEnd = Math.min(segmentEnd, globalEndTime);
+                    const overlapDuration = (overlapEnd - overlapStart) / 1000;
+                    console.log(`   ✅ Segment ${seg.uri.split('/').pop()} overlaps: ${overlapDuration.toFixed(1)}s will be used`);
+                }
+
+                return overlaps;
             }).sort((a, b) => a.startTime - b.startTime);
 
             if (relevantSegments.length === 0) {
@@ -206,15 +210,25 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                     'Brak nagrań',
                     `Nie ma nagrań z ostatnich ${requestedDuration}s.\nSpróbuj ponownie za chwilę.`
                 );
-                await cameraRef.current.resumeRecording();
+                setProcessingState({ isProcessing: false, highlightId: null, progress: '' });
                 return;
             }
 
             console.log(`📊 Found ${relevantSegments.length} relevant segments`);
 
+            // Calculate expected output duration
+            let expectedDuration = 0;
+            relevantSegments.forEach(seg => {
+                const segEnd = seg.startTime + seg.duration;
+                const clipStart = Math.max(seg.startTime, globalStartTime);
+                const clipEnd = Math.min(segEnd, globalEndTime);
+                expectedDuration += (clipEnd - clipStart);
+            });
+            console.log(`🎯 Expected output: ${(expectedDuration / 1000).toFixed(1)}s (requested: ${requestedDuration}s)`);
+
             setProcessingState({
                 isProcessing: true,
-                highlightId: `capture_${now}`,
+                highlightId: `capture_${captureTimestamp}`,
                 progress: `Łączę ${relevantSegments.length} segmentów...`,
             });
 
@@ -223,7 +237,6 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                 if (!granted) {
                     Alert.alert('Błąd', 'Brak uprawnień do zapisywania w galerii');
                     setProcessingState({ isProcessing: false, highlightId: null, progress: '' });
-                    await cameraRef.current.resumeRecording();
                     return;
                 }
             }
@@ -231,7 +244,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             const highlightDir = `${FileSystem.documentDirectory}${RecordingConfig.HIGHLIGHTS_FOLDER}`;
             await FileSystem.makeDirectoryAsync(highlightDir, { intermediates: true });
 
-            const highlightId = `highlight_${now}`;
+            const highlightId = `highlight_${captureTimestamp}`;
             const outputUri = `${highlightDir}${highlightId}.mp4`;
 
             console.log('🔄 Merging segments...');
@@ -246,7 +259,6 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
 
             console.log('✅ Merge completed:', mergedPath);
 
-            // Save to gallery
             setProcessingState({
                 isProcessing: true,
                 highlightId,
@@ -265,7 +277,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
 
             const newHighlight: Highlight = {
                 id: highlightId,
-                timestamp: new Date(now),
+                timestamp: new Date(captureTimestamp),
                 duration: requestedDuration,
                 uri: mergedPath,
             };
@@ -280,13 +292,8 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
 
             showToast(`✅ Akcja ${requestedDuration}s zapisana!`);
 
-            // Resume recording
-            console.log('▶️ Resuming recording...');
-            await cameraRef.current.resumeRecording();
-            console.log('✅ Recording resumed');
-
         } catch (error) {
-            console.error('❌ Capture failed:', error);
+            console.error('❌ Capture processing failed:', error);
 
             setProcessingState({
                 isProcessing: false,
@@ -295,17 +302,59 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             });
 
             Alert.alert('Błąd', `Nie udało się zapisać akcji: ${error}`);
-
-            // Try to resume
-            try {
-                if (cameraRef.current && isRecordingRef.current) {
-                    await cameraRef.current.resumeRecording();
-                }
-            } catch (resumeError) {
-                console.error('❌ Failed to resume:', resumeError);
-            }
         }
-    }, [mediaPermission, requestMediaPermission, processingState, showToast, cleanOldSegments]);
+    }, [mediaPermission, requestMediaPermission, showToast]);
+
+    /**
+     * 🎯 LAZY CAPTURE - Queue the request, don't interrupt segment!
+     */
+    const captureHighlight = useCallback(async (requestedDuration: number = 120) => {
+        console.log('🎬 Capture highlight requested:', requestedDuration, 'seconds');
+
+        if (!isRecordingRef.current) {
+            Alert.alert('Błąd', 'Nagrywanie nie jest aktywne');
+            return;
+        }
+
+        const captureTimestamp = Date.now();
+
+        // 🆕 Add to queue instead of processing immediately
+        pendingCaptureQueue.current.push({
+            timestamp: captureTimestamp,
+            requestedDuration: requestedDuration,
+        });
+
+        console.log(`📋 Capture queued (${pendingCaptureQueue.current.length} in queue)`);
+        console.log(`⏳ Waiting for current segment to finish naturally...`);
+
+        showToast(`⏳ Zapisuję akcję ${requestedDuration}s (czekam na koniec segmentu)...`);
+
+        // The actual processing will happen in onRecordingFinished callback!
+    }, [showToast]);
+
+    /**
+     * 🔄 PROCESS PENDING CAPTURES - Called after each segment finishes
+     */
+    const processPendingCaptures = useCallback(async () => {
+        if (isProcessingCapture.current || pendingCaptureQueue.current.length === 0) {
+            return;
+        }
+
+        isProcessingCapture.current = true;
+
+        // Process all pending captures in order
+        while (pendingCaptureQueue.current.length > 0) {
+            const request = pendingCaptureQueue.current.shift()!;
+            console.log(`🎬 Processing queued capture from ${new Date(request.timestamp).toISOString()}`);
+
+            await processCaptureRequest(request.timestamp, request.requestedDuration);
+
+            // Small delay between captures
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+
+        isProcessingCapture.current = false;
+    }, [processCaptureRequest]);
 
     const startAsCamera = useCallback(async () => {
         try {
@@ -417,9 +466,6 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
         }
     }, []);
 
-    /**
-     * 🎥 START RECORDING - Segment-based with rolling buffer
-     */
     const startRecording = useCallback(async () => {
         if (!cameraRef.current) {
             Alert.alert('Błąd', 'Kamera nie jest gotowa');
@@ -437,6 +483,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             setIsRecording(true);
             isRecordingRef.current = true;
             videoSegments.current = [];
+            pendingCaptureQueue.current = []; // Clear queue
 
             const recordSegment = async (): Promise<void> => {
                 if (!isRecordingRef.current || !cameraRef.current) {
@@ -462,8 +509,13 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                             videoSegments.current.push(segment);
                             console.log(`✅ Segment recorded: ${(actualDuration / 1000).toFixed(1)}s`);
 
-                            // Clean old segments
                             cleanOldSegments();
+
+                            // 🆕 CRITICAL: Process pending captures AFTER segment is finalized!
+                            if (pendingCaptureQueue.current.length > 0) {
+                                console.log(`🎬 Segment finished, processing ${pendingCaptureQueue.current.length} pending capture(s)...`);
+                                await processPendingCaptures();
+                            }
 
                             // Continue recording if still active
                             if (isRecordingRef.current) {
@@ -479,15 +531,16 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
                         },
                     });
 
-                    // Auto-stop after SEGMENT_DURATION
-                    setTimeout(async () => {
+                    segmentAutoStopTimeout.current = setTimeout(async () => {
                         if (isRecordingRef.current && cameraRef.current) {
                             try {
+                                console.log('⏱️ Auto-stop timeout fired');
                                 await cameraRef.current.stopRecording();
                             } catch (error) {
                                 console.warn('Auto-stop warning:', error);
                             }
                         }
+                        segmentAutoStopTimeout.current = null;
                     }, SEGMENT_DURATION * 1000);
 
                 } catch (error) {
@@ -503,11 +556,8 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             setIsRecording(false);
             isRecordingRef.current = false;
         }
-    }, [device, cleanOldSegments]);
+    }, [device, cleanOldSegments, processPendingCaptures]);
 
-    /**
-     * 🛑 STOP RECORDING
-     */
     const stopRecording = useCallback(async () => {
         console.log('🛑 Stopping recording...');
 
@@ -518,11 +568,22 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
         setIsRecording(false);
         isRecordingRef.current = false;
 
+        if (segmentAutoStopTimeout.current) {
+            clearTimeout(segmentAutoStopTimeout.current);
+            segmentAutoStopTimeout.current = null;
+        }
+
         try {
             await cameraRef.current.stopRecording();
             console.log('✅ Recording stopped');
         } catch (error) {
             console.warn('Stop error:', error);
+        }
+
+        // Process any remaining pending captures
+        if (pendingCaptureQueue.current.length > 0) {
+            console.log(`🎬 Processing ${pendingCaptureQueue.current.length} pending captures before cleanup...`);
+            await processPendingCaptures();
         }
 
         // Clean up all segments after delay
@@ -538,7 +599,7 @@ export const [RecordingProvider, useRecording] = createContextHook(() => {
             console.log('🗑️ All segments cleaned up');
         }, 30000);
 
-    }, []);
+    }, [processPendingCaptures]);
 
     const deleteHighlight = useCallback(async (id: string) => {
         try {
