@@ -14,7 +14,7 @@ import type { P2PMessage } from '@/services/FirebaseService';
 import VideoMerger from '@/modules/VideoMerger';
 import RecordingConfig from '@/constants/recording';
 
-const SEGMENT_DURATION = 120;
+const SEGMENT_DURATION = 20;
 const BUFFER_DURATION = 900;
 
 interface VideoSegment {
